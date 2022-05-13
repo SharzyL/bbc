@@ -1,0 +1,93 @@
+syntax = "proto3";
+
+option go_package = "github.com/SharzyL/bbc/pb";
+
+package bbc_proto;
+
+service Ledger {
+  rpc PeekChain(PeekChainReq) returns (PeekChainAns);
+  rpc AdverticeBlock(AdverticeBlockReq) returns (AdverticeBlockAns);
+
+  rpc GetFullBlock(HashVal) returns (FullBlock);
+
+  rpc UploadTx(Tx) returns (UploadTxAns);
+}
+
+// basic types
+message HashVal {
+  bytes bytes = 1;
+}
+
+message Sig {
+  bytes bytes = 1;
+}
+
+message PubKey {
+  bytes bytes = 1;
+}
+
+// TxIn is the input transaction, it points to the PrevOutIdx-th TxOut of the transaction of hash PrevTx
+// To verify the ownerness, Sig should be equal to SigAlgorithm(txout.ReceiverPubKey, PrevTx + PrevOutIdx)
+message TxIn {
+  HashVal prev_tx = 1;
+  uint32 prev_out_idx = 2;
+  Sig sig = 3;
+}
+
+message TxOut {
+  uint64 value = 1;
+  PubKey receiver_pub_key = 2;
+}
+
+message Tx {
+  bool valid = 1;
+  repeated TxIn tx_in_list = 2;
+  repeated TxOut tx_out_list = 3;
+}
+
+message BlockHeader {
+  HashVal prev_hash = 1;
+  HashVal merkle_root = 2;
+  int64 timestamp = 3;
+  uint64 height = 4;
+  bytes block_nounce = 5;
+}
+
+message TxMerkleNode {
+  HashVal hash = 1;
+}
+
+message FullBlock {
+  BlockHeader header = 1;
+  repeated Tx tx_list = 2;
+  repeated TxMerkleNode merkle_tree = 3;
+}
+
+//--------------------
+// PeekChain
+//--------------------
+message PeekChainReq {
+  uint64 offset = 1;
+}
+
+message PeekChainAns {
+  repeated HashVal hashes = 1;
+}
+
+//--------------------
+// AdverticeBlock
+//--------------------
+message AdverticeBlockReq {
+  repeated BlockHeader headers = 1;
+}
+
+message AdverticeBlockAns {
+
+}
+
+//--------------------
+// AdverticeBlock
+//--------------------
+message UploadTxAns {
+
+}
