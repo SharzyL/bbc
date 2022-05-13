@@ -25,6 +25,11 @@ func GenesisBlock() *FullBlock {
 	}
 }
 
+// NewHashVal is a utility function to create pb.HashVal quickly
+func NewHashVal(bytes []byte) *HashVal {
+	return &HashVal{Bytes: bytes}
+}
+
 func (x *TxIn) ToSigMsgBytes() []byte {
 	buf := bytes.Buffer{}
 	buf.Write(x.PrevTx.Bytes)
@@ -64,7 +69,7 @@ func (x *BlockHeader) ToBytes() []byte {
 	intBuf := [8]byte{}
 	binary.BigEndian.PutUint64(intBuf[:], uint64(x.Timestamp))
 	buf.Write(intBuf[:])
-	binary.BigEndian.PutUint64(intBuf[:], x.Height)
+	binary.BigEndian.PutUint64(intBuf[:], uint64(x.Height))
 	buf.Write(intBuf[:])
 	buf.Write(x.BlockNounce[:])
 	return buf.Bytes()

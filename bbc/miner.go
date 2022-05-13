@@ -15,21 +15,48 @@ import (
 )
 
 type minerRpcServer struct {
-	pb.UnimplementedLedgerServer
+	pb.UnimplementedMinerServer
 	l *Miner
 }
 
-func (s *minerRpcServer) PeekChain(ctx context.Context, req *pb.PeekChainReq) (*pb.PeekChainAns, error) {
-	l := s.l
-	hashes := make([]*pb.HashVal, 0, 10)
-	for j := len(l.mainChain) - 1; j > len(l.mainChain)-10 && j >= 0; j-- {
-		hashes = append(hashes, &pb.HashVal{Bytes: Hash(l.mainChain[j].Header)})
-	}
-	return &pb.PeekChainAns{Hashes: hashes}, nil
+type fullBlockWithHash struct {
+	Block *pb.FullBlock
+	Hash  []byte
 }
 
-func (s *minerRpcServer) AdverticeBlock(ctx context.Context, req *pb.AdverticeBlockReq) (*pb.AdverticeBlockAns, error) {
-	// TODO: respond to this
+func makeFullBlockWithHash(b *pb.FullBlock) *fullBlockWithHash {
+	hash := Hash(b.Header)
+	return &fullBlockWithHash{
+		Block: b,
+		Hash:  hash,
+	}
+}
+
+func (s *minerRpcServer) PeekChain(ctx context.Context, req *pb.PeekChainReq) (ans *pb.PeekChainAns, err error) {
+	l := s.l
+	headers := make([]*pb.BlockHeader, 0, 10)
+
+	topHash := req.TopHash.Bytes
+	for i := 0; i < 10; i++ {
+		fullBlock := l.findBlockByHash(topHash)
+		if fullBlock == nil {
+			err = fmt.Errorf("cannot find block with hash %x when peekChain with depth %d", req.TopHash.Bytes, i)
+			return
+		}
+		headers = append(headers, fullBlock.Header)
+		topHash = fullBlock.Header.PrevHash.Bytes
+	}
+
+	return &pb.PeekChainAns{Headers: headers}, nil
+}
+
+func (s *minerRpcServer) AdverticeBlock(ctx context.Context, req *pb.AdverticeBlockReq) (ans *pb.AdverticeBlockAns, err error) {
+	l := s.l
+	header := req.Header
+	if header.Height <= int64(len(l.mainChain)) { // TODO: prevent selfish mining attack
+		return
+	}
+	go l.syncBlock(req.Addr, header)
 	return &pb.AdverticeBlockAns{}, nil
 }
 
@@ -44,6 +71,7 @@ func (s *minerRpcServer) GetFullBlock(ctx context.Context, req *pb.HashVal) (*pb
 }
 
 func (s *minerRpcServer) UploadTx(ctx context.Context, req *pb.Tx) (*pb.UploadTxAns, error) {
+	// TODO: send notif when Tx is full
 	l := s.l
 	l.memPool = append(l.memPool, req)
 	return &pb.UploadTxAns{}, nil
@@ -53,8 +81,7 @@ type Miner struct {
 	SelfAddr     string // network addr of self
 	PeerAddrList []string
 
-	mainChain []*pb.FullBlock
-	height    uint64
+	mainChain []*fullBlockWithHash
 
 	hashToTx    *trie.Trie
 	hashToBlock *trie.Trie
@@ -62,7 +89,7 @@ type Miner struct {
 	memPool []*pb.Tx // transactions waiting to be packed into a block
 
 	rpcServer         minerRpcServer
-	clientConnections []pb.LedgerClient
+	clientConnections []pb.MinerClient
 
 	notifChan chan struct{}
 
@@ -75,21 +102,20 @@ func NewMiner(selfAddr string, peerAddrList []string) *Miner {
 	miner := Miner{
 		SelfAddr:     selfAddr,
 		PeerAddrList: peerAddrList,
-		mainChain:    make([]*pb.FullBlock, 0, 1), // reserve space for genesis block
-		height:       1,                           // only a genesis block
+		mainChain:    make([]*fullBlockWithHash, 0, 1), // reserve space for genesis block
 		hashToTx:     trie.NewTrie(),
 		hashToBlock:  trie.NewTrie(),
 		memPool:      make([]*pb.Tx, 0, 1000),
 		rpcServer:    minerRpcServer{}, // init self pointer later
 
-		clientConnections: make([]pb.LedgerClient, 0, len(peerAddrList)),
+		clientConnections: make([]pb.MinerClient, 0, len(peerAddrList)),
 
 		notifChan: make(chan struct{}),
 
 		logger: sugarLogger,
 	}
 	miner.rpcServer.l = &miner
-	miner.mainChain = append(miner.mainChain, pb.GenesisBlock())
+	miner.mainChain = append(miner.mainChain, makeFullBlockWithHash(pb.GenesisBlock()))
 	return &miner
 }
 
@@ -107,9 +133,9 @@ func (l *Miner) MainLoop() {
 		}
 		conn, err := grpc.Dial(addr)
 		if err != nil {
-			l.logger.Fatalw("failed to dial: %v", zap.Error(err))
+			l.logger.Fatalw("failed to dial", zap.Error(err))
 		}
-		l.clientConnections = append(l.clientConnections, pb.NewLedgerClient(conn))
+		l.clientConnections = append(l.clientConnections, pb.NewMinerClient(conn))
 	}
 
 	for {
@@ -119,12 +145,14 @@ func (l *Miner) MainLoop() {
 		// create new block
 		newBlock := l.createBlock()
 		l.hashToBlock.Insert(Hash(newBlock.Header), newBlock)
+		l.mainChain = append(l.mainChain, makeFullBlockWithHash(newBlock))
 
 		// advertice block
 		for _, client := range l.clientConnections {
 			ctx := context.Background()
 			_, err := client.AdverticeBlock(ctx, &pb.AdverticeBlockReq{
-				Headers: []*pb.BlockHeader{newBlock.Header},
+				Header: newBlock.Header,
+				Addr:   l.SelfAddr,
 			})
 			if err != nil {
 				l.logger.Errorw("err on advertice block", zap.Error(err))
@@ -138,12 +166,12 @@ func (l *Miner) MainLoop() {
 func (l *Miner) serveLoop() {
 	lis, err := net.Listen("tcp", l.SelfAddr)
 	if err != nil {
-		l.logger.Fatalf("failed to listen: %v", err)
+		l.logger.Fatalw("failed to listen", zap.Error(err))
 	}
 	s := grpc.NewServer()
-	pb.RegisterLedgerServer(s, &minerRpcServer{l: l})
+	pb.RegisterMinerServer(s, &minerRpcServer{l: l})
 	if err := s.Serve(lis); err != nil {
-		l.logger.Fatalf("failed to serve %v", err)
+		l.logger.Fatalw("failed to serve %v", zap.Error(err))
 	}
 }
 
@@ -163,6 +191,69 @@ func (l *Miner) findBlockByHash(hash []byte) *pb.FullBlock {
 	} else {
 		return nil
 	}
+}
+
+func (l *Miner) syncBlock(addr string, topHeader *pb.BlockHeader) {
+	// prerequisite: topHeader.length >= mainCHain.length, topHeader.top != mainChain.top
+
+	conn, err := grpc.Dial(addr)
+	if err != nil {
+		l.logger.Errorw("fail to dial when syncing block", zap.Error(err))
+		return
+	}
+	client := pb.NewMinerClient(conn)
+	ctx := context.Background()
+
+	prevHash := topHeader.PrevHash.Bytes
+	hashesToSync := make([][]byte, 0, 1)
+	hashesToSync = append(hashesToSync, Hash(topHeader))
+
+	if topHeader.Height > 1 && !bytes.Equal(prevHash, l.mainChain[topHeader.Height-1].Hash) {
+		hashesToSync = append(hashesToSync, prevHash)
+	} else {
+		// requesting older blocks to find out all blocks to sync
+	findMaxSynced:
+		for {
+			l.logger.Infow("start send peekChainReq", zap.String("addr", addr), zap.Binary("hash", prevHash))
+			ans, err := client.PeekChain(ctx, &pb.PeekChainReq{TopHash: pb.NewHashVal(prevHash)})
+			l.logger.Infow("peekChainReq responds", zap.String("addr", addr),
+				zap.Int("numHeaders", len(ans.Headers)))
+			if err != nil {
+				l.logger.Errorw("fail to peek chain when syncing block, quit syncing", zap.Error(err))
+				return
+			}
+			for _, hdr := range ans.Headers {
+				curHash := Hash(hdr)
+				if !bytes.Equal(curHash, prevHash) {
+					l.logger.Errorw("block hash inconsistent with prevHash",
+						zap.Int64("height", hdr.Height),
+						zap.Binary("curHash", curHash),
+						zap.Binary("prevHash", prevHash))
+					return
+				}
+				prevHash = hdr.PrevHash.Bytes
+				if hdr.Height > 1 || !bytes.Equal(prevHash, l.mainChain[hdr.Height-1].Hash) {
+					hashesToSync = append(hashesToSync, prevHash)
+				} else {
+					break findMaxSynced
+				}
+			}
+		}
+	}
+
+	newBlocks := make([]*fullBlockWithHash, 0, len(hashesToSync))
+	for i := len(hashesToSync) - 1; i >= 0; i++ {
+		hash := hashesToSync[i]
+		fullBlock, err := client.GetFullBlock(ctx, pb.NewHashVal(hash))
+		if err != nil {
+			l.logger.Errorw("fail to get full block",
+				zap.String("addr", addr),
+				zap.Binary("hash", hash))
+		}
+		newBlocks = append(newBlocks, makeFullBlockWithHash(fullBlock))
+	}
+	minUnsynced := newBlocks[0].Block.Header.Height
+	l.mainChain = append(l.mainChain[:minUnsynced], newBlocks...)
 }
 
 func (l *Miner) createBlock() *pb.FullBlock {
@@ -192,9 +283,9 @@ func (l *Miner) createBlock() *pb.FullBlock {
 	}
 	merkleRootHash := Hash(firstTx, secondTx)
 
-	prevHash := Hash(l.mainChain[len(l.mainChain)-1].Header)
+	prevHash := l.mainChain[len(l.mainChain)-1].Hash
 	timestamp := time.Now().Unix()
-	height := uint64(len(l.mainChain))
+	height := int64(len(l.mainChain))
 	return &pb.FullBlock{
 		Header: &pb.BlockHeader{
 			PrevHash:    &pb.HashVal{Bytes: prevHash},
@@ -208,9 +299,7 @@ func (l *Miner) createBlock() *pb.FullBlock {
 	}
 }
 
-func (l *Miner) receiveBlock(b *pb.FullBlock, h uint64) error {
-	// TODO: verify prev pointer
-
+func (l *Miner) verifyBlock(b *pb.FullBlock, h uint64) error {
 	// verify merkle tree
 	d := log2Floor(uint64(len(b.TxList)))
 	// verify size

@@ -4,7 +4,7 @@ option go_package = "github.com/SharzyL/bbc/pb";
 
 package bbc_proto;
 
-service Ledger {
+service Miner {
   rpc PeekChain(PeekChainReq) returns (PeekChainAns);
   rpc AdverticeBlock(AdverticeBlockReq) returns (AdverticeBlockAns);
 
@@ -49,7 +49,7 @@ message BlockHeader {
   HashVal prev_hash = 1;
   HashVal merkle_root = 2;
   int64 timestamp = 3;
-  uint64 height = 4;
+  int64 height = 4;
   bytes block_nounce = 5;
 }
 
@@ -67,18 +67,20 @@ message FullBlock {
 // PeekChain
 //--------------------
 message PeekChainReq {
-  uint64 offset = 1;
+  HashVal top_hash = 1;
 }
 
 message PeekChainAns {
-  repeated HashVal hashes = 1;
+  // a sequence of headers from newest to latest
+  repeated BlockHeader headers = 1;
 }
 
 //--------------------
 // AdverticeBlock
 //--------------------
 message AdverticeBlockReq {
-  repeated BlockHeader headers = 1;
+  BlockHeader header = 1;
+  string addr = 2;
 }
 
 message AdverticeBlockAns {

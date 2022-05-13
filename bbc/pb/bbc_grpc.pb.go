@@ -18,194 +18,194 @@ import (
 // Requires gRPC-Go v1.32.0 or later.
 const _ = grpc.SupportPackageIsVersion7
 
-// LedgerClient is the client API for Ledger service.
+// MinerClient is the client API for Miner service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-type LedgerClient interface {
+type MinerClient interface {
 	PeekChain(ctx context.Context, in *PeekChainReq, opts ...grpc.CallOption) (*PeekChainAns, error)
 	AdverticeBlock(ctx context.Context, in *AdverticeBlockReq, opts ...grpc.CallOption) (*AdverticeBlockAns, error)
 	GetFullBlock(ctx context.Context, in *HashVal, opts ...grpc.CallOption) (*FullBlock, error)
 	UploadTx(ctx context.Context, in *Tx, opts ...grpc.CallOption) (*UploadTxAns, error)
 }
 
-type ledgerClient struct {
+type minerClient struct {
 	cc grpc.ClientConnInterface
 }
 
-func NewLedgerClient(cc grpc.ClientConnInterface) LedgerClient {
-	return &ledgerClient{cc}
+func NewMinerClient(cc grpc.ClientConnInterface) MinerClient {
+	return &minerClient{cc}
 }
 
-func (c *ledgerClient) PeekChain(ctx context.Context, in *PeekChainReq, opts ...grpc.CallOption) (*PeekChainAns, error) {
+func (c *minerClient) PeekChain(ctx context.Context, in *PeekChainReq, opts ...grpc.CallOption) (*PeekChainAns, error) {
 	out := new(PeekChainAns)
-	err := c.cc.Invoke(ctx, "/bbc_proto.Ledger/PeekChain", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/bbc_proto.Miner/PeekChain", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *ledgerClient) AdverticeBlock(ctx context.Context, in *AdverticeBlockReq, opts ...grpc.CallOption) (*AdverticeBlockAns, error) {
+func (c *minerClient) AdverticeBlock(ctx context.Context, in *AdverticeBlockReq, opts ...grpc.CallOption) (*AdverticeBlockAns, error) {
 	out := new(AdverticeBlockAns)
-	err := c.cc.Invoke(ctx, "/bbc_proto.Ledger/AdverticeBlock", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/bbc_proto.Miner/AdverticeBlock", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *ledgerClient) GetFullBlock(ctx context.Context, in *HashVal, opts ...grpc.CallOption) (*FullBlock, error) {
+func (c *minerClient) GetFullBlock(ctx context.Context, in *HashVal, opts ...grpc.CallOption) (*FullBlock, error) {
 	out := new(FullBlock)
-	err := c.cc.Invoke(ctx, "/bbc_proto.Ledger/GetFullBlock", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/bbc_proto.Miner/GetFullBlock", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *ledgerClient) UploadTx(ctx context.Context, in *Tx, opts ...grpc.CallOption) (*UploadTxAns, error) {
+func (c *minerClient) UploadTx(ctx context.Context, in *Tx, opts ...grpc.CallOption) (*UploadTxAns, error) {
 	out := new(UploadTxAns)
-	err := c.cc.Invoke(ctx, "/bbc_proto.Ledger/UploadTx", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/bbc_proto.Miner/UploadTx", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-// LedgerServer is the server API for Ledger service.
-// All implementations must embed UnimplementedLedgerServer
+// MinerServer is the server API for Miner service.
+// All implementations must embed UnimplementedMinerServer
 // for forward compatibility
-type LedgerServer interface {
+type MinerServer interface {
 	PeekChain(context.Context, *PeekChainReq) (*PeekChainAns, error)
 	AdverticeBlock(context.Context, *AdverticeBlockReq) (*AdverticeBlockAns, error)
 	GetFullBlock(context.Context, *HashVal) (*FullBlock, error)
 	UploadTx(context.Context, *Tx) (*UploadTxAns, error)
-	mustEmbedUnimplementedLedgerServer()
+	mustEmbedUnimplementedMinerServer()
 }
 
-// UnimplementedLedgerServer must be embedded to have forward compatible implementations.
-type UnimplementedLedgerServer struct {
+// UnimplementedMinerServer must be embedded to have forward compatible implementations.
+type UnimplementedMinerServer struct {
 }
 
-func (UnimplementedLedgerServer) PeekChain(context.Context, *PeekChainReq) (*PeekChainAns, error) {
+func (UnimplementedMinerServer) PeekChain(context.Context, *PeekChainReq) (*PeekChainAns, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PeekChain not implemented")
 }
-func (UnimplementedLedgerServer) AdverticeBlock(context.Context, *AdverticeBlockReq) (*AdverticeBlockAns, error) {
+func (UnimplementedMinerServer) AdverticeBlock(context.Context, *AdverticeBlockReq) (*AdverticeBlockAns, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AdverticeBlock not implemented")
 }
-func (UnimplementedLedgerServer) GetFullBlock(context.Context, *HashVal) (*FullBlock, error) {
+func (UnimplementedMinerServer) GetFullBlock(context.Context, *HashVal) (*FullBlock, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetFullBlock not implemented")
 }
-func (UnimplementedLedgerServer) UploadTx(context.Context, *Tx) (*UploadTxAns, error) {
+func (UnimplementedMinerServer) UploadTx(context.Context, *Tx) (*UploadTxAns, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UploadTx not implemented")
 }
-func (UnimplementedLedgerServer) mustEmbedUnimplementedLedgerServer() {}
+func (UnimplementedMinerServer) mustEmbedUnimplementedMinerServer() {}
 
-// UnsafeLedgerServer may be embedded to opt out of forward compatibility for this service.
-// Use of this interface is not recommended, as added methods to LedgerServer will
+// UnsafeMinerServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to MinerServer will
 // result in compilation errors.
-type UnsafeLedgerServer interface {
-	mustEmbedUnimplementedLedgerServer()
+type UnsafeMinerServer interface {
+	mustEmbedUnimplementedMinerServer()
 }
 
-func RegisterLedgerServer(s grpc.ServiceRegistrar, srv LedgerServer) {
-	s.RegisterService(&Ledger_ServiceDesc, srv)
+func RegisterMinerServer(s grpc.ServiceRegistrar, srv MinerServer) {
+	s.RegisterService(&Miner_ServiceDesc, srv)
 }
 
-func _Ledger_PeekChain_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _Miner_PeekChain_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(PeekChainReq)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(LedgerServer).PeekChain(ctx, in)
+		return srv.(MinerServer).PeekChain(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/bbc_proto.Ledger/PeekChain",
+		FullMethod: "/bbc_proto.Miner/PeekChain",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(LedgerServer).PeekChain(ctx, req.(*PeekChainReq))
+		return srv.(MinerServer).PeekChain(ctx, req.(*PeekChainReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Ledger_AdverticeBlock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _Miner_AdverticeBlock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(AdverticeBlockReq)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(LedgerServer).AdverticeBlock(ctx, in)
+		return srv.(MinerServer).AdverticeBlock(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/bbc_proto.Ledger/AdverticeBlock",
+		FullMethod: "/bbc_proto.Miner/AdverticeBlock",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(LedgerServer).AdverticeBlock(ctx, req.(*AdverticeBlockReq))
+		return srv.(MinerServer).AdverticeBlock(ctx, req.(*AdverticeBlockReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Ledger_GetFullBlock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _Miner_GetFullBlock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(HashVal)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(LedgerServer).GetFullBlock(ctx, in)
+		return srv.(MinerServer).GetFullBlock(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/bbc_proto.Ledger/GetFullBlock",
+		FullMethod: "/bbc_proto.Miner/GetFullBlock",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(LedgerServer).GetFullBlock(ctx, req.(*HashVal))
+		return srv.(MinerServer).GetFullBlock(ctx, req.(*HashVal))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Ledger_UploadTx_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _Miner_UploadTx_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(Tx)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(LedgerServer).UploadTx(ctx, in)
+		return srv.(MinerServer).UploadTx(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/bbc_proto.Ledger/UploadTx",
+		FullMethod: "/bbc_proto.Miner/UploadTx",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(LedgerServer).UploadTx(ctx, req.(*Tx))
+		return srv.(MinerServer).UploadTx(ctx, req.(*Tx))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-// Ledger_ServiceDesc is the grpc.ServiceDesc for Ledger service.
+// Miner_ServiceDesc is the grpc.ServiceDesc for Miner service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
-var Ledger_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "bbc_proto.Ledger",
-	HandlerType: (*LedgerServer)(nil),
+var Miner_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "bbc_proto.Miner",
+	HandlerType: (*MinerServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
 			MethodName: "PeekChain",
-			Handler:    _Ledger_PeekChain_Handler,
+			Handler:    _Miner_PeekChain_Handler,
 		},
 		{
 			MethodName: "AdverticeBlock",
-			Handler:    _Ledger_AdverticeBlock_Handler,
+			Handler:    _Miner_AdverticeBlock_Handler,
 		},
 		{
 			MethodName: "GetFullBlock",
-			Handler:    _Ledger_GetFullBlock_Handler,
+			Handler:    _Miner_GetFullBlock_Handler,
 		},
 		{
 			MethodName: "UploadTx",
-			Handler:    _Ledger_UploadTx_Handler,
+			Handler:    _Miner_UploadTx_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
