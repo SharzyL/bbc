@@ -1,7 +1,6 @@
 package bbc
 
 import (
-	"bytes"
 	"crypto/ed25519"
 	"crypto/sha512"
 	"hash"
@@ -26,15 +25,11 @@ type Hashable interface {
 }
 
 func Hash(vs ...Hashable) []byte {
-	if len(vs) == 1 {
-		return NewHashState().Sum(vs[0].ToBytes())
-	} else {
-		buf := bytes.Buffer{}
-		for _, v := range vs {
-			buf.Write(v.ToBytes())
-		}
-		return NewHashState().Sum(buf.Bytes())
+	h := NewHashState()
+	for _, v := range vs {
+		_, _ = h.Write(v.ToBytes())
 	}
+	return h.Sum(nil)
 }
 
 type Signable interface {

@@ -3,43 +3,15 @@ package pb
 import (
 	"bytes"
 	"encoding/binary"
-	"github.com/SharzyL/bbc/bbc"
 )
-
-func GenesisBlock() *FullBlock {
-	zeroHash := [bbc.HashLen]byte{}
-	zeroNounce := [bbc.NounceLen]byte{}
-	txList := make([]*Tx, 0)
-	merkleTree := make([]*TxMerkleNode, 0)
-	merkleHash := &HashVal{Bytes: bbc.Hash(&Tx{}, &Tx{})}
-	return &FullBlock{
-		Header: &BlockHeader{
-			PrevHash:    &HashVal{Bytes: zeroHash[:]},
-			MerkleRoot:  merkleHash,
-			Timestamp:   0,
-			Height:      0,
-			BlockNounce: zeroNounce[:], // TODO: compute a correct nounce
-		},
-		TxList:     txList,
-		MerkleTree: merkleTree,
-	}
-}
-
-func CoinBaseTx(minerPubKey []byte, val uint64) *Tx {
-	txOut := &TxOut{
-		Value:          val,
-		ReceiverPubKey: &PubKey{Bytes: minerPubKey},
-	}
-	return &Tx{
-		Valid:     true,
-		TxInList:  []*TxIn{},
-		TxOutList: []*TxOut{txOut},
-	}
-}
 
 // NewHashVal is a utility function to create pb.HashVal quickly
 func NewHashVal(bytes []byte) *HashVal {
 	return &HashVal{Bytes: bytes}
+}
+
+func NewMerkleTreeNode(bytes []byte) *TxMerkleNode {
+	return &TxMerkleNode{Hash: NewHashVal(bytes)}
 }
 
 func (x *TxIn) ToSigMsgBytes() []byte {
@@ -71,6 +43,8 @@ func (x *Tx) ToBytes() []byte {
 			buf.Write(intBuf[:8])
 			buf.Write(tx.ReceiverPubKey.Bytes)
 		}
+		binary.BigEndian.PutUint64(intBuf[:8], uint64(x.Timestamp))
+		buf.Write(intBuf[:8])
 	}
 	return buf.Bytes()
 }

@@ -43,6 +43,7 @@ message Tx {
   bool valid = 1;
   repeated TxIn tx_in_list = 2;
   repeated TxOut tx_out_list = 3;
+  int64 timestamp = 4;
 }
 
 message BlockHeader {

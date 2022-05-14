@@ -47,7 +47,7 @@ func (c *minerClient) PeekChain(ctx context.Context, in *PeekChainReq, opts ...g
 
 func (c *minerClient) AdverticeBlock(ctx context.Context, in *AdverticeBlockReq, opts ...grpc.CallOption) (*AdverticeBlockAns, error) {
 	out := new(AdverticeBlockAns)
-	err := c.cc.Invoke(ctx, "/bbc_proto.Miner/AdverticeBlock", in, out, opts...)
+	err := c.cc.Invoke(ctx, "/bbc_proto.Miner/AdvertiseBlock", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -91,7 +91,7 @@ func (UnimplementedMinerServer) PeekChain(context.Context, *PeekChainReq) (*Peek
 	return nil, status.Errorf(codes.Unimplemented, "method PeekChain not implemented")
 }
 func (UnimplementedMinerServer) AdverticeBlock(context.Context, *AdverticeBlockReq) (*AdverticeBlockAns, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method AdverticeBlock not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method AdvertiseBlock not implemented")
 }
 func (UnimplementedMinerServer) GetFullBlock(context.Context, *HashVal) (*FullBlock, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetFullBlock not implemented")
@@ -140,7 +140,7 @@ func _Miner_AdverticeBlock_Handler(srv interface{}, ctx context.Context, dec fun
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/bbc_proto.Miner/AdverticeBlock",
+		FullMethod: "/bbc_proto.Miner/AdvertiseBlock",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(MinerServer).AdverticeBlock(ctx, req.(*AdverticeBlockReq))
@@ -196,7 +196,7 @@ var Miner_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Miner_PeekChain_Handler,
 		},
 		{
-			MethodName: "AdverticeBlock",
+			MethodName: "AdvertiseBlock",
 			Handler:    _Miner_AdverticeBlock_Handler,
 		},
 		{

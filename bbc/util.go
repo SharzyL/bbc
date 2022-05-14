@@ -1,6 +1,7 @@
 package bbc
 
 import (
+	"fmt"
 	"math/bits"
 )
 
@@ -65,4 +66,8 @@ func maxInt(a, b int) int {
 	} else {
 		return a
 	}
+}
+
+func b2str(b []byte) string {
+	return fmt.Sprintf("%x", b)[:16]
 }

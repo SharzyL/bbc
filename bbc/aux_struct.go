@@ -2,6 +2,37 @@ package bbc
 
 import "github.com/SharzyL/bbc/bbc/pb"
 
+func GenesisBlock() *pb.FullBlock {
+	zeroHash := [HashLen]byte{}
+	zeroNounce := [NounceLen]byte{}
+	txList := make([]*pb.Tx, 0)
+	merkleTree := make([]*pb.TxMerkleNode, 0)
+	merkleHash := &pb.HashVal{Bytes: Hash(&pb.Tx{}, &pb.Tx{})}
+	return &pb.FullBlock{
+		Header: &pb.BlockHeader{
+			PrevHash:    &pb.HashVal{Bytes: zeroHash[:]},
+			MerkleRoot:  merkleHash,
+			Timestamp:   0,
+			Height:      0,
+			BlockNounce: zeroNounce[:], // TODO: compute a correct nounce
+		},
+		TxList:     txList,
+		MerkleTree: merkleTree,
+	}
+}
+
+func CoinBaseTx(minerPubKey []byte, val uint64) *pb.Tx {
+	txOut := &pb.TxOut{
+		Value:          val,
+		ReceiverPubKey: &pb.PubKey{Bytes: minerPubKey},
+	}
+	return &pb.Tx{
+		Valid:     true,
+		TxInList:  []*pb.TxIn{},
+		TxOutList: []*pb.TxOut{txOut},
+	}
+}
+
 type fullBlockWithHash struct {
 	Block *pb.FullBlock
 	Hash  []byte
