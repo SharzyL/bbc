@@ -367,6 +367,7 @@ findMaxSynced:
 				l.logger.Errorw("fail to get full block",
 					zap.String("addr", addr),
 					zap.String("hash", b2str(hash)))
+				return
 			}
 		}
 		newBlocks = append(newBlocks, makeFullBlockWithHash(fullBlock))
@@ -399,6 +400,7 @@ findMaxSynced:
 			return
 		}
 		l.mainChain = append(l.mainChain, b)
+		l.hashToBlock.Insert(b.Hash, b.Block)
 		l.updateTxInfo(b)
 	}
 	success = true
