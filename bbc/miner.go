@@ -3,6 +3,7 @@ package bbc
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"fmt"
 	"net"
 	"time"
@@ -29,6 +30,20 @@ func makeFullBlockWithHash(b *pb.FullBlock) *fullBlockWithHash {
 	return &fullBlockWithHash{
 		Block: b,
 		Hash:  hash,
+	}
+}
+
+type txWithConsumer = struct {
+	Tx        *pb.Tx
+	Block     *fullBlockWithHash
+	Consumers []*fullBlockWithHash
+}
+
+func makeTxWithConsumer(tx *pb.Tx, block *fullBlockWithHash) *txWithConsumer {
+	return &txWithConsumer{
+		Tx:        tx,
+		Block:     block,
+		Consumers: make([]*fullBlockWithHash, len(tx.TxOutList)),
 	}
 }
 
@@ -70,10 +85,18 @@ func (s *minerRpcServer) GetFullBlock(ctx context.Context, req *pb.HashVal) (*pb
 	}
 }
 
-func (s *minerRpcServer) UploadTx(ctx context.Context, req *pb.Tx) (*pb.UploadTxAns, error) {
+func (s *minerRpcServer) UploadTx(ctx context.Context, tx *pb.Tx) (*pb.UploadTxAns, error) {
 	// TODO: send notif when Tx is full
 	l := s.l
-	l.memPool = append(l.memPool, req)
+	if !tx.Valid {
+		return nil, fmt.Errorf("why send me an invalid tx")
+	}
+	txFee, err := l.verifyTx(tx)
+	if err != nil {
+		return nil, err
+	}
+	l.memPool = append(l.memPool, tx)
+	l.memPoolTotalFee += txFee
 	return &pb.UploadTxAns{}, nil
 }
 
@@ -81,15 +104,19 @@ type Miner struct {
 	SelfAddr     string // network addr of self
 	PeerAddrList []string
 
+	minerPubKey  []byte
+	minerPrivKey []byte
+
 	mainChain []*fullBlockWithHash
 
 	hashToTx    *trie.Trie
 	hashToBlock *trie.Trie
 
-	memPool []*pb.Tx // transactions waiting to be packed into a block
+	memPool         []*pb.Tx // transactions waiting to be packed into a block
+	memPoolTotalFee uint64
 
-	rpcServer         minerRpcServer
-	clientConnections []pb.MinerClient
+	rpcServer   minerRpcServer
+	peerClients []pb.MinerClient
 
 	notifChan chan struct{}
 
@@ -99,16 +126,27 @@ type Miner struct {
 func NewMiner(selfAddr string, peerAddrList []string) *Miner {
 	logger, _ := zap.NewDevelopment()
 	sugarLogger := logger.Sugar()
+	pubKey, privKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		sugarLogger.Panicw("cannot gen key", zap.Error(err))
+	}
 	miner := Miner{
 		SelfAddr:     selfAddr,
 		PeerAddrList: peerAddrList,
-		mainChain:    make([]*fullBlockWithHash, 0, 1), // reserve space for genesis block
-		hashToTx:     trie.NewTrie(),
-		hashToBlock:  trie.NewTrie(),
-		memPool:      make([]*pb.Tx, 0, 1000),
-		rpcServer:    minerRpcServer{}, // init self pointer later
 
-		clientConnections: make([]pb.MinerClient, 0, len(peerAddrList)),
+		minerPubKey:  pubKey,
+		minerPrivKey: privKey,
+
+		mainChain: make([]*fullBlockWithHash, 0, 1), // reserve space for genesis block
+
+		hashToTx:    trie.NewTrie(),
+		hashToBlock: trie.NewTrie(),
+
+		memPool:         make([]*pb.Tx, 0, 1000),
+		memPoolTotalFee: 0,
+
+		rpcServer:   minerRpcServer{}, // init self pointer later
+		peerClients: make([]pb.MinerClient, 0, len(peerAddrList)),
 
 		notifChan: make(chan struct{}),
 
@@ -135,7 +173,7 @@ func (l *Miner) MainLoop() {
 		if err != nil {
 			l.logger.Fatalw("failed to dial", zap.Error(err))
 		}
-		l.clientConnections = append(l.clientConnections, pb.NewMinerClient(conn))
+		l.peerClients = append(l.peerClients, pb.NewMinerClient(conn))
 	}
 
 	for {
@@ -148,7 +186,7 @@ func (l *Miner) MainLoop() {
 		l.mainChain = append(l.mainChain, makeFullBlockWithHash(newBlock))
 
 		// advertice block
-		for _, client := range l.clientConnections {
+		for _, client := range l.peerClients {
 			ctx := context.Background()
 			_, err := client.AdverticeBlock(ctx, &pb.AdverticeBlockReq{
 				Header: newBlock.Header,
@@ -175,8 +213,8 @@ func (l *Miner) serveLoop() {
 	}
 }
 
-func (l *Miner) findTxByHash(hash []byte) *pb.Tx {
-	v, ok := l.hashToTx.Search(hash).(*pb.Tx)
+func (l *Miner) findTxByHash(hash []byte) *txWithConsumer {
+	v, ok := l.hashToTx.Search(hash).(*txWithConsumer)
 	if ok {
 		return v
 	} else {
@@ -205,7 +243,7 @@ func (l *Miner) syncBlock(addr string, topHeader *pb.BlockHeader) {
 	ctx := context.Background()
 
 	prevHash := topHeader.PrevHash.Bytes
-	hashesToSync := make([][]byte, 0, 1)
+	hashesToSync := make([][]byte, 0, 1) // a list of unsynced block hashes from newest to oldest
 	hashesToSync = append(hashesToSync, Hash(topHeader))
 
 	if topHeader.Height > 1 && !bytes.Equal(prevHash, l.mainChain[topHeader.Height-1].Hash) {
@@ -234,6 +272,9 @@ func (l *Miner) syncBlock(addr string, topHeader *pb.BlockHeader) {
 				prevHash = hdr.PrevHash.Bytes
 				if hdr.Height > 1 || !bytes.Equal(prevHash, l.mainChain[hdr.Height-1].Hash) {
 					hashesToSync = append(hashesToSync, prevHash)
+				} else if hdr.Height == 1 || bytes.Equal(prevHash, l.mainChain[0].Hash) {
+					l.logger.Errorw("hash of genesis hash not consistent")
+					return
 				} else {
 					break findMaxSynced
 				}
@@ -242,7 +283,7 @@ func (l *Miner) syncBlock(addr string, topHeader *pb.BlockHeader) {
 	}
 
 	newBlocks := make([]*fullBlockWithHash, 0, len(hashesToSync))
-	for i := len(hashesToSync) - 1; i >= 0; i++ {
+	for i := len(hashesToSync) - 1; i >= 0; i-- {
 		hash := hashesToSync[i]
 		fullBlock, err := client.GetFullBlock(ctx, pb.NewHashVal(hash))
 		if err != nil {
@@ -252,12 +293,51 @@ func (l *Miner) syncBlock(addr string, topHeader *pb.BlockHeader) {
 		}
 		newBlocks = append(newBlocks, makeFullBlockWithHash(fullBlock))
 	}
+
+	originalChain := l.mainChain
 	minUnsynced := newBlocks[0].Block.Header.Height
-	l.mainChain = append(l.mainChain[:minUnsynced], newBlocks...)
+	verificationFailed := false
+	for _, b := range newBlocks {
+		err := l.verifyBlock(b.Block)
+		if err != nil {
+			verificationFailed = true
+			break
+		}
+		l.mainChain = append(l.mainChain[:minUnsynced], b)
+		l.updateTxInfo(b)
+	}
+
+	if verificationFailed {
+		// recovery from failed append chain
+		l.mainChain = originalChain
+		for _, b := range originalChain[minUnsynced:] {
+			l.updateTxInfo(b)
+		}
+	}
+}
+
+func (l *Miner) updateTxInfo(fullBlock *fullBlockWithHash) {
+	// insert all tx to hashToTx
+	// update consumers of previous tx
+	for _, tx := range fullBlock.Block.TxList {
+		if tx.Valid {
+			l.hashToTx.Insert(Hash(tx), makeTxWithConsumer(tx, fullBlock))
+			for _, txIn := range tx.TxInList {
+				prevTx := l.findTxByHash(txIn.PrevTx.Bytes)
+				if txIn.PrevOutIdx >= uint32(len(prevTx.Tx.TxOutList)) {
+					l.logger.Errorw("PrevOutIdx too large")
+					return
+				}
+				prevTx.Consumers[txIn.PrevOutIdx] = fullBlock
+			}
+		}
+	}
 }
 
 func (l *Miner) createBlock() *pb.FullBlock {
-	txList := l.memPool
+	var txList []*pb.Tx
+	txList = append(txList, pb.CoinBaseTx(l.minerPubKey, l.memPoolTotalFee+MinerReward))
+	txList = append(txList, l.memPool...)
 
 	n := uint64(len(txList))
 	numTx := power2Ceil(n)
@@ -299,13 +379,12 @@ func (l *Miner) createBlock() *pb.FullBlock {
 	}
 }
 
-func (l *Miner) verifyBlock(b *pb.FullBlock, h uint64) error {
-	// verify merkle tree
-	d := log2Floor(uint64(len(b.TxList)))
+func (l *Miner) verifyBlock(b *pb.FullBlock) error {
 	// verify size
-	if d <= 0 {
+	if len(b.TxList) < 2 {
 		return fmt.Errorf("block should contain at least two transactions")
 	}
+	d := log2Floor(uint64(len(b.TxList)))
 	numTx := 1 << d
 	if len(b.TxList) != numTx {
 		return fmt.Errorf("num of transactions not a power of 2")
@@ -313,6 +392,7 @@ func (l *Miner) verifyBlock(b *pb.FullBlock, h uint64) error {
 	if len(b.MerkleTree) != 2*numTx-2 {
 		return fmt.Errorf("len of merkle tree not consistent with num of tx")
 	}
+
 	// verify hash of transaction
 	for i := 0; i < numTx; i++ {
 		if !bytes.Equal(b.MerkleTree[numTx-2+i].Hash.Bytes, Hash(b.TxList[i])) {
@@ -334,38 +414,72 @@ func (l *Miner) verifyBlock(b *pb.FullBlock, h uint64) error {
 	// TODO:
 
 	// verify transactions
-	err := l.verifyCoinBase(b.TxList[0])
+	coinBaseVal, err := l.verifyCoinBase(b.TxList[0])
 	if err != nil {
 		return err
 	}
+
+	totalFee := uint64(0)
 	for _, t := range b.TxList[1:] {
-		err := l.verifyTx(t)
-		if err != nil {
-			return err
+		if t.Valid {
+			txFee, err := l.verifyTx(t)
+			if err != nil {
+				return err
+			}
+			totalFee += txFee
 		}
+	}
+	if coinBaseVal != totalFee+MinerReward {
+		return fmt.Errorf("incorrect coinbase val: %d + %d != %d", coinBaseVal, totalFee, MinerReward)
 	}
 
 	return nil
 }
 
-func (l *Miner) verifyCoinBase(t *pb.Tx) error {
-	// TODO: verify coinbase
-	return nil
+func (l *Miner) verifyCoinBase(t *pb.Tx) (coinBaseVal uint64, err error) {
+	if !t.Valid {
+		return 0, fmt.Errorf("invalid coinbase tx")
+	} else if len(t.TxInList) > 0 {
+		return 0, fmt.Errorf("coinbase input nonempty")
+	} else if len(t.TxOutList) != 1 {
+		return 0, fmt.Errorf("coinbase output len != 1")
+	} else {
+		return t.TxOutList[0].Value, nil
+	}
 }
 
-func (l *Miner) verifyTx(t *pb.Tx) error {
+func (l *Miner) isTxOutSpent(t *txWithConsumer, txOutIdx uint32) error {
+	if txOutIdx >= uint32(len(t.Consumers)) {
+		return fmt.Errorf("txOutIdx too large (%d >= %d)", txOutIdx, len(t.Consumers))
+	} else {
+		consumer := t.Consumers[txOutIdx]
+		if consumer == nil {
+			return nil
+		} else if consumer.Block.Header.Height >= int64(len(l.mainChain)) {
+			return nil
+		} else if !bytes.Equal(l.mainChain[consumer.Block.Header.Height].Hash, consumer.Hash) {
+			return nil
+		} else {
+			return fmt.Errorf("txOut is already spent on block [%x] on height %d",
+				consumer.Hash, consumer.Block.Header.Height)
+		}
+	}
+}
+
+func (l *Miner) verifyTx(t *pb.Tx) (minerFee uint64, err error) {
 	totalInput := uint64(0)
 	for i, txin := range t.TxInList {
-		if prevTx := l.findTxByHash(txin.PrevTx.Bytes); prevTx != nil {
-			return fmt.Errorf("cannot find block")
+		if prevTxW := l.findTxByHash(txin.PrevTx.Bytes); prevTxW != nil {
+			return 0, fmt.Errorf("cannot find tx of hash [%x]", txin.PrevTx.Bytes)
 		} else {
-			if len(prevTx.TxOutList) < int(txin.PrevOutIdx)+1 {
-				return fmt.Errorf("cannot find txout")
+			err := l.isTxOutSpent(prevTxW, txin.PrevOutIdx)
+			if err != nil {
+				return 0, err
 			}
-			prevTxOut := prevTx.TxOutList[txin.PrevOutIdx]
-			// TODO: check if txout is spent
+
+			prevTxOut := prevTxW.Tx.TxOutList[txin.PrevOutIdx]
 			if !Verify(txin, prevTxOut.ReceiverPubKey.Bytes, txin.Sig.Bytes) {
-				return fmt.Errorf("verify txin (%d) sig failed", i)
+				return 0, fmt.Errorf("verify txin (%d) sig failed", i)
 			}
 			totalInput += prevTxOut.Value
 		}
@@ -377,8 +491,8 @@ func (l *Miner) verifyTx(t *pb.Tx) error {
 	}
 
 	if totalInput < totalOutput {
-		return fmt.Errorf("tx input less than output")
+		return 0, fmt.Errorf("tx input less than output")
 	}
 
-	return nil
+	return totalInput - totalOutput, nil
 }

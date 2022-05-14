@@ -25,6 +25,18 @@ func GenesisBlock() *FullBlock {
 	}
 }
 
+func CoinBaseTx(minerPubKey []byte, val uint64) *Tx {
+	txOut := &TxOut{
+		Value:          val,
+		ReceiverPubKey: &PubKey{Bytes: minerPubKey},
+	}
+	return &Tx{
+		Valid:     true,
+		TxInList:  []*TxIn{},
+		TxOutList: []*TxOut{txOut},
+	}
+}
+
 // NewHashVal is a utility function to create pb.HashVal quickly
 func NewHashVal(bytes []byte) *HashVal {
 	return &HashVal{Bytes: bytes}
