@@ -50,3 +50,19 @@ func maxInt64(a, b int64) int64 {
 		return a
 	}
 }
+
+func minInt(a, b int) int {
+	if a >= b {
+		return b
+	} else {
+		return a
+	}
+}
+
+func maxInt(a, b int) int {
+	if a <= b {
+		return b
+	} else {
+		return a
+	}
+}

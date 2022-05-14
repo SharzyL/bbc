@@ -15,9 +15,14 @@ func makeFullBlockWithHash(b *pb.FullBlock) *fullBlockWithHash {
 	}
 }
 
+type txWithFee = struct {
+	Tx  *pb.Tx
+	Fee uint64
+}
+
 type txWithConsumer = struct {
 	Tx        *pb.Tx
-	Block     *fullBlockWithHash
+	Block     *fullBlockWithHash // might be nil, thus not packed to a block
 	Consumers []*fullBlockWithHash
 }
 

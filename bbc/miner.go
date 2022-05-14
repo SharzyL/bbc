@@ -19,9 +19,13 @@ import (
 type minerRpcHandler struct {
 	pb.UnimplementedMinerServer
 	l *Miner
+
+	memPoolFullChan chan<- struct{}
 }
 
-const memPoolLimit = 255
+const blockLimit = 256
+const adverticeTimeout = 5 * time.Second
+const rpcTimeout = 1 * time.Second
 
 func (s *minerRpcHandler) PeekChain(ctx context.Context, req *pb.PeekChainReq) (ans *pb.PeekChainAns, err error) {
 	l := s.l
@@ -68,7 +72,6 @@ func (s *minerRpcHandler) GetFullBlock(ctx context.Context, req *pb.HashVal) (*p
 }
 
 func (s *minerRpcHandler) UploadTx(ctx context.Context, tx *pb.Tx) (*pb.UploadTxAns, error) {
-	// TODO: send notif when Tx is full
 	l := s.l
 	if !tx.Valid {
 		return nil, fmt.Errorf("why send me an invalid tx")
@@ -77,12 +80,16 @@ func (s *minerRpcHandler) UploadTx(ctx context.Context, tx *pb.Tx) (*pb.UploadTx
 	l.memPoolMtx.Lock()
 	defer l.memPoolMtx.Unlock()
 
-	txFee, err := l.verifyTx(tx)
+	fee, err := l.verifyTx(tx)
+	txf := &txWithFee{Tx: tx, Fee: fee}
 	if err != nil {
 		return nil, err
 	}
-	l.memPool = append(l.memPool, tx)
-	l.memPoolTotalFee += txFee
+
+	l.memPool = append(l.memPool, txf)
+	if len(l.memPool) >= blockLimit-1 { // reserve one space for coinbase
+		s.memPoolFullChan <- struct{}{}
+	}
 	return &pb.UploadTxAns{}, nil
 }
 
@@ -99,13 +106,10 @@ type Miner struct {
 	hashToTx    *trie.Trie // stores *txWithConsumer
 	hashToBlock *trie.Trie // stores *pb.FullBlock
 
-	memPool         []*pb.Tx // transactions waiting to be packed into a block
-	memPoolTotalFee uint64
+	memPool []*txWithFee // transactions waiting to be packed into a block
 
 	rpcHandler  minerRpcHandler
-	peerClients []pb.MinerClient
-
-	notifChan chan struct{}
+	peerClients []*pb.MinerClient
 
 	memPoolMtx *sync.RWMutex
 	chainMtx   *sync.RWMutex
@@ -134,13 +138,9 @@ func NewMiner(selfAddr string, peerAddrList []string) *Miner {
 		hashToTx:    trie.NewTrie(),
 		hashToBlock: trie.NewTrie(),
 
-		memPool:         make([]*pb.Tx, 0, 1000),
-		memPoolTotalFee: 0,
+		memPool: make([]*txWithFee, 0, 1000),
 
-		rpcHandler:  minerRpcHandler{}, // init self pointer later
-		peerClients: make([]pb.MinerClient, 0, len(peerAddrList)),
-
-		notifChan: make(chan struct{}),
+		rpcHandler: minerRpcHandler{}, // init self pointer later
 
 		memPoolMtx: memPoolMtx,
 		chainMtx:   chainMtx,
@@ -157,54 +157,79 @@ func (l *Miner) MainLoop() {
 		zap.String("addr", l.SelfAddr),
 		zap.Strings("peerAddr", l.PeerAddrList))
 
-	go l.serveLoop()
+	newBlockChan := make(chan *fullBlockWithHash, 3)
+	memPoolFullChan := make(chan struct{})
 
-	// create client connections
-	for _, addr := range l.PeerAddrList {
-		if addr == l.SelfAddr {
-			continue
-		}
-		conn, err := grpc.Dial(addr)
-		if err != nil {
-			l.logger.Fatalw("failed to dial", zap.Error(err))
-		}
-		l.peerClients = append(l.peerClients, pb.NewMinerClient(conn))
-	}
+	go l.serveLoop(memPoolFullChan)
+	go l.adverticeLoop(newBlockChan)
 
 	for {
 		// wait for new transactions fill the mempool
-		<-l.notifChan
+		<-memPoolFullChan
 
 		// create new block
 		newBlock := l.createBlock()
-		if newBlock == nil {
-			continue
-		}
-
-		// advertice block
-		for _, client := range l.peerClients {
-			ctx := context.Background()
-			_, err := client.AdverticeBlock(ctx, &pb.AdverticeBlockReq{
-				Header: newBlock.Header,
-				Addr:   l.SelfAddr,
-			})
-			if err != nil {
-				l.logger.Errorw("err on advertice block", zap.Error(err))
-			}
+		if newBlock != nil {
+			newBlockChan <- newBlock
 		}
 	}
 }
 
-func (l *Miner) serveLoop() {
+func (l *Miner) serveLoop(memPoolFullChan chan<- struct{}) {
 	lis, err := net.Listen("tcp", l.SelfAddr)
 	if err != nil {
 		l.logger.Fatalw("failed to listen", zap.Error(err))
 	}
 	s := grpc.NewServer()
 	defer s.GracefulStop()
-	pb.RegisterMinerServer(s, &minerRpcHandler{l: l})
+	pb.RegisterMinerServer(s, &minerRpcHandler{
+		l:               l,
+		memPoolFullChan: memPoolFullChan,
+	})
 	if err := s.Serve(lis); err != nil {
 		l.logger.Fatalw("failed to serve %v", zap.Error(err))
+	}
+}
+
+func (l *Miner) adverticeLoop(newBlockChan <-chan *fullBlockWithHash) {
+	for {
+		var blockToAdvertice *fullBlockWithHash
+		select {
+		case blockToAdvertice = <-newBlockChan:
+		case <-time.After(adverticeTimeout):
+			l.chainMtx.RLock()
+			blockToAdvertice = l.mainChain[len(l.mainChain)-1]
+			l.chainMtx.RUnlock()
+		}
+
+		// create client connections
+		for i, addr := range l.PeerAddrList {
+			go func(i int, addr string) {
+				if addr == l.SelfAddr {
+					return
+				}
+
+				ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
+				defer cancel()
+				conn, err := grpc.DialContext(ctx, addr)
+				if err != nil {
+					l.logger.Errorw("failed to dial peer", zap.Error(err))
+					return
+				}
+				client := pb.NewMinerClient(conn)
+
+				ctx, cancel = context.WithTimeout(context.Background(), rpcTimeout)
+				defer cancel()
+				_, err = client.AdverticeBlock(ctx, &pb.AdverticeBlockReq{
+					Header: blockToAdvertice.Block.Header,
+					Addr:   l.SelfAddr,
+				})
+				if err != nil {
+					l.logger.Errorw("fail to advertise block to peer")
+					return
+				}
+			}(i, addr)
+		}
 	}
 }
 
@@ -346,22 +371,25 @@ func (l *Miner) updateTxInfo(fullBlock *fullBlockWithHash) {
 	}
 }
 
-func (l *Miner) createBlock() *pb.FullBlock {
+func (l *Miner) createBlock() *fullBlockWithHash {
 	success := false
 
 	//-----------------------
 	// mempool locked
 	//-----------------------
-	// clear current memPool
+	// take elements from memPool
 	l.memPoolMtx.Lock()
-	memPool := l.memPool
-	memPoolTotalFee := l.memPoolTotalFee
+	numTx := minInt(blockLimit-1, len(l.memPool))
+	memPool := l.memPool[:numTx]
+	var memPoolTotalFee uint64
+	for _, tx := range memPool {
+		memPoolTotalFee += tx.Fee
+	}
 	if len(memPool) <= 1 {
 		l.logger.Errorw("do not create an empty block")
 		return nil
 	}
-	l.memPool = []*pb.Tx{}
-	l.memPoolTotalFee = 0
+	l.memPool = memPool[numTx:]
 
 	// recover all memPool if creating new block failed
 	defer func() {
@@ -379,21 +407,23 @@ func (l *Miner) createBlock() *pb.FullBlock {
 	// compute coinBase and collect txList
 	var txList []*pb.Tx
 	txList = append(txList, pb.CoinBaseTx(l.minerPubKey, memPoolTotalFee+MinerReward))
-	txList = append(txList, memPool...)
+	for _, tx := range memPool {
+		txList = append(txList, tx.Tx)
+	}
 	n := uint64(len(txList))
-	numTx := power2Ceil(n)
-	for i := n; i < numTx; i++ {
+	numTotalTx := power2Ceil(n)
+	for i := n; i < numTotalTx; i++ {
 		txList = append(txList, &pb.Tx{})
 	}
 
 	// compute merkleTree
-	merkleTree := make([]*pb.TxMerkleNode, 0, 2*numTx-2)
+	merkleTree := make([]*pb.TxMerkleNode, 0, 2*numTotalTx-2)
 	// generate hash of transaction
-	for i := uint64(0); i < numTx; i++ {
-		merkleTree[numTx-2+i].Hash.Bytes = Hash(txList[i])
+	for i := uint64(0); i < numTotalTx; i++ {
+		merkleTree[numTotalTx-2+i].Hash.Bytes = Hash(txList[i])
 	}
 	// verify merkle nodes
-	for i := numTx - 3; i >= 0; i-- {
+	for i := numTotalTx - 3; i >= 0; i-- {
 		merkleTree[i].Hash.Bytes = Hash(merkleTree[2*i+2], merkleTree[2*i+3])
 	}
 	// generate merkle root
@@ -433,11 +463,13 @@ func (l *Miner) createBlock() *pb.FullBlock {
 
 	// add new block to mainChain if it is fresh
 	if bytes.Equal(l.mainChain[len(l.mainChain)-1].Hash, prevBlock.Hash) {
-		l.mainChain = append(l.mainChain, makeFullBlockWithHash(b))
+		fb := makeFullBlockWithHash(b)
+		l.mainChain = append(l.mainChain, fb)
 		l.hashToBlock.Insert(Hash(b.Header), b)
 		success = true
-		return b
+		return fb
 	} else {
+		l.logger.Infow("mined block is superceded", zap.Int("h", len(l.mainChain)-1))
 		return nil
 	}
 
