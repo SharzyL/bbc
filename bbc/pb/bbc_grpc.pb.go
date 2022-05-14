@@ -23,7 +23,7 @@ const _ = grpc.SupportPackageIsVersion7
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type MinerClient interface {
 	PeekChain(ctx context.Context, in *PeekChainReq, opts ...grpc.CallOption) (*PeekChainAns, error)
-	AdverticeBlock(ctx context.Context, in *AdverticeBlockReq, opts ...grpc.CallOption) (*AdverticeBlockAns, error)
+	AdvertiseBlock(ctx context.Context, in *AdvertiseBlockReq, opts ...grpc.CallOption) (*AdvertiseBlockAns, error)
 	GetFullBlock(ctx context.Context, in *HashVal, opts ...grpc.CallOption) (*FullBlock, error)
 	UploadTx(ctx context.Context, in *Tx, opts ...grpc.CallOption) (*UploadTxAns, error)
 }
@@ -45,8 +45,8 @@ func (c *minerClient) PeekChain(ctx context.Context, in *PeekChainReq, opts ...g
 	return out, nil
 }
 
-func (c *minerClient) AdverticeBlock(ctx context.Context, in *AdverticeBlockReq, opts ...grpc.CallOption) (*AdverticeBlockAns, error) {
-	out := new(AdverticeBlockAns)
+func (c *minerClient) AdvertiseBlock(ctx context.Context, in *AdvertiseBlockReq, opts ...grpc.CallOption) (*AdvertiseBlockAns, error) {
+	out := new(AdvertiseBlockAns)
 	err := c.cc.Invoke(ctx, "/bbc_proto.Miner/AdvertiseBlock", in, out, opts...)
 	if err != nil {
 		return nil, err
@@ -77,7 +77,7 @@ func (c *minerClient) UploadTx(ctx context.Context, in *Tx, opts ...grpc.CallOpt
 // for forward compatibility
 type MinerServer interface {
 	PeekChain(context.Context, *PeekChainReq) (*PeekChainAns, error)
-	AdverticeBlock(context.Context, *AdverticeBlockReq) (*AdverticeBlockAns, error)
+	AdvertiseBlock(context.Context, *AdvertiseBlockReq) (*AdvertiseBlockAns, error)
 	GetFullBlock(context.Context, *HashVal) (*FullBlock, error)
 	UploadTx(context.Context, *Tx) (*UploadTxAns, error)
 	mustEmbedUnimplementedMinerServer()
@@ -90,7 +90,7 @@ type UnimplementedMinerServer struct {
 func (UnimplementedMinerServer) PeekChain(context.Context, *PeekChainReq) (*PeekChainAns, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PeekChain not implemented")
 }
-func (UnimplementedMinerServer) AdverticeBlock(context.Context, *AdverticeBlockReq) (*AdverticeBlockAns, error) {
+func (UnimplementedMinerServer) AdvertiseBlock(context.Context, *AdvertiseBlockReq) (*AdvertiseBlockAns, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AdvertiseBlock not implemented")
 }
 func (UnimplementedMinerServer) GetFullBlock(context.Context, *HashVal) (*FullBlock, error) {
@@ -130,20 +130,20 @@ func _Miner_PeekChain_Handler(srv interface{}, ctx context.Context, dec func(int
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Miner_AdverticeBlock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AdverticeBlockReq)
+func _Miner_AdvertiseBlock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdvertiseBlockReq)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(MinerServer).AdverticeBlock(ctx, in)
+		return srv.(MinerServer).AdvertiseBlock(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
 		FullMethod: "/bbc_proto.Miner/AdvertiseBlock",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MinerServer).AdverticeBlock(ctx, req.(*AdverticeBlockReq))
+		return srv.(MinerServer).AdvertiseBlock(ctx, req.(*AdvertiseBlockReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -197,7 +197,7 @@ var Miner_ServiceDesc = grpc.ServiceDesc{
 		},
 		{
 			MethodName: "AdvertiseBlock",
-			Handler:    _Miner_AdverticeBlock_Handler,
+			Handler:    _Miner_AdvertiseBlock_Handler,
 		},
 		{
 			MethodName: "GetFullBlock",

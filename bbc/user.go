@@ -54,6 +54,8 @@ func (u *User) MainLoop(txIntervalMs int) {
 					u.logger.Errorw("failed to dial peer", zap.Error(err))
 					return
 				}
+				defer conn.Close()
+
 				client := pb.NewMinerClient(conn)
 
 				ctx, cancel = context.WithTimeout(context.Background(), rpcTimeout)

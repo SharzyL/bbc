@@ -6,7 +6,7 @@ package bbc_proto;
 
 service Miner {
   rpc PeekChain(PeekChainReq) returns (PeekChainAns);
-  rpc AdverticeBlock(AdverticeBlockReq) returns (AdverticeBlockAns);
+  rpc AdvertiseBlock(AdvertiseBlockReq) returns (AdvertiseBlockAns);
 
   rpc GetFullBlock(HashVal) returns (FullBlock);
 
@@ -79,12 +79,12 @@ message PeekChainAns {
 //--------------------
 // AdverticeBlock
 //--------------------
-message AdverticeBlockReq {
+message AdvertiseBlockReq {
   BlockHeader header = 1;
   string addr = 2;
 }
 
-message AdverticeBlockAns {
+message AdvertiseBlockAns {
 
 }
 

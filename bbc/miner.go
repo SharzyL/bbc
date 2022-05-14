@@ -57,7 +57,7 @@ func (s *minerRpcHandler) PeekChain(ctx context.Context, req *pb.PeekChainReq) (
 	return &pb.PeekChainAns{Headers: headers}, nil
 }
 
-func (s *minerRpcHandler) AdvertiseBlock(ctx context.Context, req *pb.AdverticeBlockReq) (ans *pb.AdverticeBlockAns, err error) {
+func (s *minerRpcHandler) AdvertiseBlock(ctx context.Context, req *pb.AdvertiseBlockReq) (ans *pb.AdvertiseBlockAns, err error) {
 	l := s.l
 	header := req.Header
 
@@ -67,11 +67,12 @@ func (s *minerRpcHandler) AdvertiseBlock(ctx context.Context, req *pb.AdverticeB
 
 	l.chainMtx.RLock()
 	mainChainHeight := int64(len(l.mainChain)) - 1
+	l.chainMtx.RUnlock()
 
 	if header.Height > mainChainHeight { // TODO: prevent selfish mining attack
 		go l.syncBlock(req.Addr, header)
 	}
-	return &pb.AdverticeBlockAns{}, nil
+	return &pb.AdvertiseBlockAns{}, nil
 }
 
 func (s *minerRpcHandler) GetFullBlock(ctx context.Context, req *pb.HashVal) (*pb.FullBlock, error) {
@@ -185,15 +186,11 @@ func NewMiner(selfAddr string, peerAddrList []string) *Miner {
 }
 
 func (l *Miner) MainLoop() {
-	l.logger.Infow("starting mainloop",
-		zap.String("addr", l.SelfAddr),
-		zap.Strings("peerAddr", l.PeerAddrList))
-
 	newBlockChan := make(chan *fullBlockWithHash, 3)
 	memPoolFullChan := make(chan struct{})
 
 	go l.serveLoop(memPoolFullChan)
-	go l.adverticeLoop(newBlockChan)
+	go l.advertiseLoop(newBlockChan)
 
 	for {
 		// wait for new transactions fill the mempool
@@ -218,25 +215,31 @@ func (l *Miner) serveLoop(memPoolFullChan chan<- struct{}) {
 		l:               l,
 		memPoolFullChan: memPoolFullChan,
 	})
+	l.logger.Infow("starting mainloop",
+		zap.String("addr", l.SelfAddr),
+		zap.Strings("peerAddr", l.PeerAddrList))
 	if err := s.Serve(lis); err != nil {
 		l.logger.Fatalw("failed to serve %v", zap.Error(err))
 	}
 }
 
-func (l *Miner) adverticeLoop(newBlockChan <-chan *fullBlockWithHash) {
+func (l *Miner) advertiseLoop(newBlockChan <-chan *fullBlockWithHash) {
 	for {
-		var blockToAdvertice *fullBlockWithHash
+		var blockToAdvertise *fullBlockWithHash
 		select {
-		case blockToAdvertice = <-newBlockChan:
+		case blockToAdvertise = <-newBlockChan:
 		case <-time.After(adverticeTimeout):
 			l.chainMtx.RLock()
-			blockToAdvertice = l.mainChain[len(l.mainChain)-1]
+			blockToAdvertise = l.mainChain[len(l.mainChain)-1]
 			l.chainMtx.RUnlock()
 		}
 
-		// create client connections
+		// advertise new block to peers
+		wg := sync.WaitGroup{}
+		wg.Add(len(l.PeerAddrList))
 		for i, addr := range l.PeerAddrList {
 			go func(i int, addr string) {
+				defer wg.Done()
 				if addr == l.SelfAddr {
 					return
 				}
@@ -248,24 +251,27 @@ func (l *Miner) adverticeLoop(newBlockChan <-chan *fullBlockWithHash) {
 					l.logger.Errorw("failed to dial peer", zap.Error(err))
 					return
 				}
+				defer conn.Close()
+
 				client := pb.NewMinerClient(conn)
 
 				ctx, cancel = context.WithTimeout(context.Background(), rpcTimeout)
 				defer cancel()
 				l.logger.Infow("advertice block to peer",
-					zap.Int64("height", blockToAdvertice.Block.Header.Height),
-					zap.String("hash", b2str(blockToAdvertice.Hash)),
-					zap.String("addr", addr))
-				_, err = client.AdverticeBlock(ctx, &pb.AdverticeBlockReq{
-					Header: blockToAdvertice.Block.Header,
+					zap.Int64("height", blockToAdvertise.Block.Header.Height),
+					zap.String("hash", b2str(blockToAdvertise.Hash)),
+					zap.String("peer", addr))
+				_, err = client.AdvertiseBlock(ctx, &pb.AdvertiseBlockReq{
+					Header: blockToAdvertise.Block.Header,
 					Addr:   l.SelfAddr,
 				})
 				if err != nil {
-					l.logger.Errorw("fail to advertise block to peer")
+					l.logger.Errorw("fail to advertise block to peer", zap.Error(err))
 					return
 				}
 			}(i, addr)
 		}
+		wg.Wait()
 	}
 }
 
@@ -297,6 +303,8 @@ func (l *Miner) syncBlock(addr string, topHeader *pb.BlockHeader) {
 		l.logger.Errorw("fail to dial when syncing block", zap.Error(err))
 		return
 	}
+	defer conn.Close()
+
 	client := pb.NewMinerClient(conn)
 
 	hashesToSync := make([][]byte, 0, 1) // a list of unsynced block hashes from newest to oldest, hightest first
@@ -331,8 +339,10 @@ findMaxSynced:
 		prevHash := headersPending[len(headersPending)-1].PrevHash.Bytes
 		l.logger.Infow("send peekChainReq", zap.String("addr", addr), zap.String("hash", b2str(prevHash)))
 
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
 		ans, err := client.PeekChain(ctx, &pb.PeekChainReq{TopHash: pb.NewHashVal(prevHash)})
+		cancel()
+
 		if err != nil {
 			l.logger.Errorw("fail peekChainReq", zap.Error(err))
 			return
