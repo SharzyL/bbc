@@ -3,7 +3,10 @@
 
 package trie
 
-import "bytes"
+import (
+	"bytes"
+	"sync"
+)
 
 type trieNode struct {
 	data     interface{}
@@ -13,6 +16,7 @@ type trieNode struct {
 
 type Trie struct {
 	root *trieNode
+	mtx  *sync.RWMutex
 }
 
 func NewTrie() *Trie {
@@ -22,10 +26,14 @@ func NewTrie() *Trie {
 			children: make(map[byte]*trieNode),
 			key:      nil,
 		},
+		mtx: &sync.RWMutex{},
 	}
 }
 
 func (t *Trie) Search(val []byte) interface{} {
+	t.mtx.RLock()
+	defer t.mtx.RUnlock()
+
 	n := t.root
 	for _, b := range val {
 		n = n.children[b]
@@ -44,6 +52,9 @@ func (t *Trie) Search(val []byte) interface{} {
 }
 
 func (t *Trie) Insert(val []byte, data interface{}) {
+	t.mtx.Lock()
+	defer t.mtx.Unlock()
+
 	n := t.root
 	for i, b := range val {
 		newNode := n.children[b]
