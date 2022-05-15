@@ -79,7 +79,7 @@ func (s *minerRpcHandler) PeekChainByHeight(ctx context.Context, req *pb.PeekCha
 
 	l.chainMtx.RLock()
 	defer l.chainMtx.RUnlock()
-	if req.Height >= int64(len(l.mainChain)) {
+	if req.Height >= int64(len(l.mainChain)) || req.Height < 0 {
 		return &pb.PeekChainByHeightAns{Header: nil}, nil
 	} else {
 		header := l.mainChain[req.Height].Block.Header
@@ -122,10 +122,13 @@ func (s *minerRpcHandler) FindTx(ctx context.Context, hash *pb.HashVal) (*pb.TxI
 	l.logger.Infow("receive FindTx request", zap.String("hash", b2str(hash.Bytes)))
 	tx := l.findTxByHash(hash.Bytes)
 	if tx != nil {
-		return &pb.TxInfo{BlockHeader: tx.Block.Block.Header}, nil
-	} else {
-		return &pb.TxInfo{BlockHeader: nil}, nil
+		l.chainMtx.RLock()
+		defer l.chainMtx.RUnlock()
+		if l.isBlockOnChain(tx.Block) {
+			return &pb.TxInfo{BlockHeader: tx.Block.Block.Header}, nil
+		}
 	}
+	return &pb.TxInfo{BlockHeader: nil}, nil
 }
 
 func (s *minerRpcHandler) UploadTx(ctx context.Context, tx *pb.Tx) (*pb.UploadTxAns, error) {
@@ -141,6 +144,15 @@ func (s *minerRpcHandler) UploadTx(ctx context.Context, tx *pb.Tx) (*pb.UploadTx
 	fee, err := l.verifyTx(tx)
 	if err != nil {
 		return nil, fmt.Errorf("fail to verify tx: %v", err)
+	}
+	for _, txIn := range tx.TxInList {
+		for _, memPoolTx := range l.memPool {
+			for _, txIn2 := range memPoolTx.Tx.TxInList {
+				if bytes.Equal(txIn.PrevTx.Bytes, txIn2.PrevTx.Bytes) && txIn.PrevOutIdx == txIn2.PrevOutIdx {
+					return nil, fmt.Errorf("txIn already been used")
+				}
+			}
+		}
 	}
 	txf := &txWithFee{Tx: tx, Fee: fee}
 
@@ -467,41 +479,37 @@ func (l *Miner) updateTxInfo(fullBlock *fullBlockWithHash) {
 }
 
 func (l *Miner) createBlock() *fullBlockWithHash {
-	success := false
-
 	//-----------------------
 	// mempool locked
 	//-----------------------
 	// take elements from memPool
-	l.memPoolMtx.Lock()
-	numTx := minInt(blockLimit-1, len(l.memPool))
-	memPool := l.memPool[:numTx]
-	var memPoolTotalFee uint64
-	for _, tx := range memPool {
-		memPoolTotalFee += tx.Fee
-	}
-	l.memPool = l.memPool[numTx:]
+	l.chainMtx.RLock()
+	l.memPoolMtx.RLock()
 
-	// recover all memPool if creating new block failed
-	defer func() {
-		if !success {
-			l.logger.Infow("new block not added to chain, rollback the mempool")
-			l.memPoolMtx.Lock()
-			defer l.memPoolMtx.Unlock()
-			l.memPool = append(l.memPool, memPool...)
+	txList := []*pb.Tx{CoinBaseTx(l.minerPubKey, 0)}
+	var memPoolTotalFee uint64
+
+	minUncheckedIdx := 0
+	for i, tx := range l.memPool {
+		minUncheckedIdx = i + 1
+		if len(txList) >= blockLimit {
+			break
 		}
-	}()
-	l.memPoolMtx.Unlock()
+
+		if txW := l.findTxByHash(Hash(tx.Tx)); txW != nil && l.isBlockOnChain(txW.Block) {
+			// ignore tx that is already on the chain
+			continue
+		} else {
+			memPoolTotalFee += tx.Fee
+			txList = append(txList, tx.Tx)
+		}
+	}
+	l.memPoolMtx.RUnlock()
+	l.chainMtx.RUnlock()
 	//-----------------------
 	// mempool unlocked
 	//-----------------------
 
-	// compute coinBase and collect txList
-	var txList []*pb.Tx
-	txList = append(txList, CoinBaseTx(l.minerPubKey, memPoolTotalFee+MinerReward))
-	for _, tx := range memPool {
-		txList = append(txList, tx.Tx)
-	}
 	n := uint64(len(txList))
 	numTotalTx := maxUInt64(power2Ceil(n), uint64(2)) // at least two transactions
 	for i := n; i < numTotalTx; i++ {                 // padding with empty transactions
@@ -567,7 +575,17 @@ func (l *Miner) createBlock() *fullBlockWithHash {
 		l.mainChain = append(l.mainChain, fb)
 		l.hashToBlock.Insert(Hash(b.Header), b)
 		l.updateTxInfo(fb)
-		success = true
+
+		//-----------------------
+		// memPool locked
+		//-----------------------
+		l.memPoolMtx.Lock()
+		l.memPool = l.memPool[minUncheckedIdx:]
+		l.memPoolMtx.Unlock()
+		//-----------------------
+		// memPool unlocked
+		//-----------------------
+
 		l.logger.Infow("new mined block added to main chain",
 			zap.Int64("height", fb.Block.Header.Height),
 			zap.String("hash", b2str(fb.Hash)))
@@ -576,7 +594,6 @@ func (l *Miner) createBlock() *fullBlockWithHash {
 		l.logger.Infow("mined block is superceded", zap.Int("h", len(l.mainChain)-1))
 		return nil
 	}
-
 	//-----------------------
 	// chain unlocked
 	//-----------------------
@@ -623,7 +640,7 @@ func (l *Miner) verifyBlock(b *pb.FullBlock) error {
 	// verify BlockNounce (crypto puzzle)
 	// TODO:
 
-	// verify transactions
+	// verify transaction
 	coinBaseVal, err := l.verifyCoinBase(b.TxList[0])
 	if err != nil {
 		return err
@@ -676,7 +693,17 @@ func (l *Miner) isTxOutSpent(t *txWithConsumer, txOutIdx uint32) error {
 	}
 }
 
+func (l *Miner) isBlockOnChain(b *fullBlockWithHash) bool {
+	height := b.Block.Header.Height
+	if height <= int64(len(l.mainChain)) && bytes.Equal(l.mainChain[height].Hash, b.Hash) {
+		return true
+	} else {
+		return false
+	}
+}
+
 func (l *Miner) verifyTx(t *pb.Tx) (minerFee uint64, err error) {
+	// TODO: discards transactions appearing in previous block
 	totalInput := uint64(0)
 	for i, txin := range t.TxInList {
 		if prevTxW := l.findTxByHash(txin.PrevTx.Bytes); prevTxW == nil {
