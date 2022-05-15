@@ -1,11 +1,9 @@
 package bbc
 
 import (
-	"bytes"
 	"crypto/ed25519"
 	"crypto/sha512"
 	"hash"
-	"math/bits"
 	"math/rand"
 
 	"go.uber.org/atomic"
@@ -59,14 +57,10 @@ func Verify(s Signable, pk []byte, sig []byte) bool {
 	return ed25519.Verify(pk, s.ToSigMsgBytes(), sig)
 }
 
-func Mine(b *pb.BlockHeader, interrupter *atomic.Bool, prefixLen int) (success bool) {
-	headerBytes := b.ToBytes()
+func Mine(h *pb.BlockHeader, interrupter *atomic.Bool, prefixLen int) (success bool) {
+	headerBytes := h.ToBytes()
 	hasher := NewHashState()
 	nounceStartIdx := len(headerBytes) - NounceLen
-
-	prefixByteLen := prefixLen / 8
-	zeroBytes := make([]byte, prefixByteLen)
-	zeroBits := prefixLen % 8
 
 	for {
 		for i := 0; i < 100000; i++ {
@@ -74,11 +68,10 @@ func Mine(b *pb.BlockHeader, interrupter *atomic.Bool, prefixLen int) (success b
 			rand.Read(headerBytes[nounceStartIdx:])
 			_, _ = hasher.Write(headerBytes)
 			hashVal := hasher.Sum(nil)
-			if bytes.Equal(hashVal[:prefixByteLen], zeroBytes) {
-				if zeroBits == 0 || bits.LeadingZeros8(hashVal[prefixByteLen]) >= zeroBits {
-					b.BlockNounce = headerBytes[nounceStartIdx:]
-					return true
-				}
+
+			if hasLeadingZeros(hashVal, prefixLen) {
+				h.BlockNounce = headerBytes[nounceStartIdx:]
+				return true
 			}
 		}
 		if interrupter.Load() {

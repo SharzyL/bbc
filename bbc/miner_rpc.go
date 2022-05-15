@@ -20,7 +20,7 @@ type minerRpcHandler struct {
 
 func (s *minerRpcHandler) PeekChain(ctx context.Context, req *pb.PeekChainReq) (ans *pb.PeekChainAns, err error) {
 	l := s.l
-	l.logger.Infow("receive PeekChain request",
+	l.logger.Debugw("receive PeekChain request",
 		zap.String("hash", b2str(req.TopHash.Bytes)),
 		zap.Int64("limit", req.GetLimit()))
 	headers := make([]*pb.BlockHeader, 0, 10)
@@ -85,7 +85,7 @@ func (s *minerRpcHandler) AdvertiseBlock(ctx context.Context, req *pb.AdvertiseB
 		zap.Int64("selfH", mainChainHeight),
 		zap.String("hashH", b2str(Hash(header))))
 
-	if header.Height > mainChainHeight { // TODO: prevent selfish mining attack
+	if header.Height > mainChainHeight {
 		go l.syncBlock(req.Addr, header)
 	} else if header.Height == mainChainHeight {
 		// check prf(padding, header) == 0 to determine whether to sync the block

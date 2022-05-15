@@ -401,7 +401,7 @@ func (l *Miner) createBlock() *fullBlockWithHash {
 			MerkleRoot:  &pb.HashVal{Bytes: merkleRootHash},
 			Timestamp:   timestamp,
 			Height:      prevBlock.Block.Header.Height + 1,
-			BlockNounce: nil,
+			BlockNounce: make([]byte, NounceLen),
 		},
 		TxList:     txList,
 		MerkleTree: merkleTree,
@@ -446,6 +446,7 @@ func (l *Miner) createBlock() *fullBlockWithHash {
 		//-----------------------
 
 		l.logger.Infow("new mined block added to main chain",
+			zap.String("nounce", b2str(fb.Block.Header.BlockNounce)),
 			zap.Int64("height", fb.Block.Header.Height),
 			zap.String("hash", b2str(fb.Hash)))
 		return fb
@@ -490,12 +491,14 @@ func (l *Miner) verifyBlock(b *pb.FullBlock) error {
 	}
 
 	// verify BlockNounce (crypto puzzle)
-	// TODO:
+	if !hasLeadingZeros(Hash(b.Header), miningDifficulty) {
+		return fmt.Errorf("verify nounce failed, header hash %x", Hash(b.Header))
+	}
 
 	// verify transaction
 	coinBaseVal, err := l.verifyCoinBase(b.TxList[0])
 	if err != nil {
-		return err
+		return fmt.Errorf("verify coinbase failed: %v", err)
 	}
 
 	totalFee := uint64(0)

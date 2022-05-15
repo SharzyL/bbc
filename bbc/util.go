@@ -108,3 +108,17 @@ func maxInt(a, b int) int {
 func b2str(b []byte) string {
 	return fmt.Sprintf("%x", b)[:16]
 }
+
+func hasLeadingZeros(b []byte, len int) bool {
+	byteNum := len / 8
+	remainingBits := len % 8
+	for i := 0; i < byteNum; i++ {
+		if b[i] != 0 {
+			return false
+		}
+	}
+	if remainingBits > 0 && bits.LeadingZeros8(b[byteNum]) < remainingBits {
+		return false
+	}
+	return true
+}
