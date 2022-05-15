@@ -33,6 +33,68 @@ const adverticeTimeout = 5 * time.Second
 const rpcTimeout = 1 * time.Second
 const peekChainDefaultLimit = int64(10)
 
+// Miner should be not be initialized manually
+type Miner struct {
+	SelfAddr     string // network addr of self
+	PeerAddrList []string
+
+	minerPubKey  []byte
+	minerPrivKey []byte
+	prfPadding   []byte // we will use y = Hash(prfPadding, x) to construct a pseudo-random function
+
+	mainChain []*fullBlockWithHash
+
+	hashToTx    *trie.Trie // stores *txWithConsumer
+	hashToBlock *trie.Trie // stores *pb.FullBlock
+
+	memPool []*txWithFee // transactions waiting to be packed into a block
+
+	rpcHandler  minerRpcHandler
+	peerClients []*pb.MinerClient
+
+	memPoolMtx *sync.RWMutex
+	chainMtx   *sync.RWMutex
+
+	logger *zap.SugaredLogger
+}
+
+func NewMiner(pubKey []byte, privKey []byte, selfAddr string, peerAddrList []string) *Miner {
+	logger := getLogger()
+
+	memPoolMtx := &sync.RWMutex{}
+	chainMtx := &sync.RWMutex{}
+
+	miner := Miner{
+		SelfAddr:     selfAddr,
+		PeerAddrList: peerAddrList,
+
+		minerPubKey:  pubKey,
+		minerPrivKey: privKey,
+
+		mainChain: make([]*fullBlockWithHash, 0, 1), // reserve space for genesis block
+
+		hashToTx:    trie.NewTrie(),
+		hashToBlock: trie.NewTrie(),
+
+		memPool: make([]*txWithFee, 0, 1000),
+
+		rpcHandler: minerRpcHandler{}, // init self pointer later
+
+		memPoolMtx: memPoolMtx,
+		chainMtx:   chainMtx,
+
+		logger: logger,
+	}
+	miner.rpcHandler.l = &miner
+
+	genesisBlock := makeFullBlockWithHash(GenesisBlock())
+	miner.hashToBlock.Insert(genesisBlock.Hash, genesisBlock.Block)
+	miner.mainChain = append(miner.mainChain, genesisBlock)
+
+	logger.Infow("add genesis block", zap.String("hash", b2str(genesisBlock.Hash)))
+	return &miner
+}
+
 func (s *minerRpcHandler) PeekChain(ctx context.Context, req *pb.PeekChainReq) (ans *pb.PeekChainAns, err error) {
 	l := s.l
 	l.logger.Infow("receive PeekChain request",
@@ -174,68 +236,6 @@ func (s *minerRpcHandler) UploadTx(ctx context.Context, tx *pb.Tx) (*pb.UploadTx
 	//	zap.Uint64("fee", fee),
 	//	zap.Int("l", len(l.memPool)))
 	return &pb.UploadTxAns{}, nil
-}
-
-// Miner should be not be initialized manually
-type Miner struct {
-	SelfAddr     string // network addr of self
-	PeerAddrList []string
-
-	minerPubKey  []byte
-	minerPrivKey []byte
-	prfPadding   []byte // we will use y = Hash(prfPadding, x) to construct a pseudo-random function
-
-	mainChain []*fullBlockWithHash
-
-	hashToTx    *trie.Trie // stores *txWithConsumer
-	hashToBlock *trie.Trie // stores *pb.FullBlock
-
-	memPool []*txWithFee // transactions waiting to be packed into a block
-
-	rpcHandler  minerRpcHandler
-	peerClients []*pb.MinerClient
-
-	memPoolMtx *sync.RWMutex
-	chainMtx   *sync.RWMutex
-
-	logger *zap.SugaredLogger
-}
-
-func NewMiner(pubKey []byte, privKey []byte, selfAddr string, peerAddrList []string) *Miner {
-	logger := getLogger()
-
-	memPoolMtx := &sync.RWMutex{}
-	chainMtx := &sync.RWMutex{}
-
-	miner := Miner{
-		SelfAddr:     selfAddr,
-		PeerAddrList: peerAddrList,
-
-		minerPubKey:  pubKey,
-		minerPrivKey: privKey,
-
-		mainChain: make([]*fullBlockWithHash, 0, 1), // reserve space for genesis block
-
-		hashToTx:    trie.NewTrie(),
-		hashToBlock: trie.NewTrie(),
-
-		memPool: make([]*txWithFee, 0, 1000),
-
-		rpcHandler: minerRpcHandler{}, // init self pointer later
-
-		memPoolMtx: memPoolMtx,
-		chainMtx:   chainMtx,
-
-		logger: logger,
-	}
-	miner.rpcHandler.l = &miner
-
-	genesisBlock := makeFullBlockWithHash(GenesisBlock())
-	miner.hashToBlock.Insert(genesisBlock.Hash, genesisBlock.Block)
-	miner.mainChain = append(miner.mainChain, genesisBlock)
-
-	logger.Infow("add genesis block", zap.String("hash", b2str(genesisBlock.Hash)))
-	return &miner
 }
 
 func (l *Miner) MainLoop() {
