@@ -74,7 +74,7 @@ func (s *minerRpcHandler) PeekChain(ctx context.Context, req *pb.PeekChainReq) (
 
 func (s *minerRpcHandler) PeekChainByHeight(ctx context.Context, req *pb.PeekChainByHeightReq) (ans *pb.PeekChainByHeightAns, err error) {
 	l := s.l
-	l.logger.Infow("receive PeekChainByHeight request",
+	l.logger.Debugw("receive PeekChainByHeight request",
 		zap.Int64("height", req.Height))
 
 	l.chainMtx.RLock()
@@ -90,24 +90,30 @@ func (s *minerRpcHandler) PeekChainByHeight(ctx context.Context, req *pb.PeekCha
 func (s *minerRpcHandler) AdvertiseBlock(ctx context.Context, req *pb.AdvertiseBlockReq) (ans *pb.AdvertiseBlockAns, err error) {
 	l := s.l
 	header := req.Header
-
-	l.logger.Infow("receive AdvertiseBlock request",
-		zap.Int64("h", header.Height),
-		zap.String("hash", b2str(Hash(header))))
-
 	l.chainMtx.RLock()
 	mainChainHeight := int64(len(l.mainChain)) - 1
+	topBlockHash := l.mainChain[mainChainHeight].Hash
 	l.chainMtx.RUnlock()
+
+	l.logger.Debugw("receive AdvertiseBlock request",
+		zap.Int64("h", header.Height),
+		zap.Int64("selfH", mainChainHeight),
+		zap.String("hashH", b2str(Hash(header))))
 
 	if header.Height > mainChainHeight { // TODO: prevent selfish mining attack
 		go l.syncBlock(req.Addr, header)
+	} else if header.Height == mainChainHeight {
+		// check prf(padding, header) == 0 to determine whether to sync the block
+		if !bytes.Equal(topBlockHash, Hash(header)) && Hash(BytesWrapper{l.prfPadding}, header)[0]%2 == 0 {
+			go l.syncBlock(req.Addr, header)
+		}
 	}
 	return &pb.AdvertiseBlockAns{}, nil
 }
 
 func (s *minerRpcHandler) GetFullBlock(ctx context.Context, req *pb.HashVal) (*pb.FullBlock, error) {
 	l := s.l
-	l.logger.Infow("receive getFullBlock request",
+	l.logger.Debugw("receive getFullBlock request",
 		zap.String("hash", b2str(req.Bytes)))
 	b := l.findBlockByHash(req.Bytes)
 	if b == nil {
@@ -119,7 +125,7 @@ func (s *minerRpcHandler) GetFullBlock(ctx context.Context, req *pb.HashVal) (*p
 
 func (s *minerRpcHandler) FindTx(ctx context.Context, hash *pb.HashVal) (*pb.TxInfo, error) {
 	l := s.l
-	l.logger.Infow("receive FindTx request", zap.String("hash", b2str(hash.Bytes)))
+	l.logger.Debugw("receive FindTx request", zap.String("hash", b2str(hash.Bytes)))
 	tx := l.findTxByHash(hash.Bytes)
 	if tx != nil {
 		l.chainMtx.RLock()
@@ -133,7 +139,7 @@ func (s *minerRpcHandler) FindTx(ctx context.Context, hash *pb.HashVal) (*pb.TxI
 
 func (s *minerRpcHandler) UploadTx(ctx context.Context, tx *pb.Tx) (*pb.UploadTxAns, error) {
 	l := s.l
-	//l.logger.Infow("receive UploadTx request", zap.Int64("t", tx.Timestamp))
+	l.logger.Debugw("receive UploadTx request", zap.Int64("t", tx.Timestamp))
 	if !tx.Valid {
 		return nil, fmt.Errorf("why send me an invalid tx")
 	}
@@ -177,6 +183,7 @@ type Miner struct {
 
 	minerPubKey  []byte
 	minerPrivKey []byte
+	prfPadding   []byte // we will use y = Hash(prfPadding, x) to construct a pseudo-random function
 
 	mainChain []*fullBlockWithHash
 
@@ -297,7 +304,7 @@ func (l *Miner) advertiseLoop(newBlockChan <-chan *fullBlockWithHash) {
 				defer cancel()
 				conn, err := grpc.DialContext(ctx, addr, grpc.WithInsecure(), grpc.WithBlock())
 				if err != nil {
-					l.logger.Errorw("failed to dial peer", zap.Error(err))
+					l.logger.Warnw("failed to dial peer", zap.Error(err))
 					return
 				}
 				defer conn.Close()
@@ -306,7 +313,7 @@ func (l *Miner) advertiseLoop(newBlockChan <-chan *fullBlockWithHash) {
 
 				ctx, cancel = context.WithTimeout(context.Background(), rpcTimeout)
 				defer cancel()
-				l.logger.Infow("advertice block to peer",
+				l.logger.Debugw("advertice block to peer",
 					zap.Int64("height", blockToAdvertise.Block.Header.Height),
 					zap.String("hash", b2str(blockToAdvertise.Hash)),
 					zap.String("peer", addr))
@@ -386,7 +393,7 @@ findMaxSynced:
 		}
 
 		prevHash := headersPending[len(headersPending)-1].PrevHash.Bytes
-		l.logger.Infow("send peekChainReq", zap.String("addr", addr), zap.String("hash", b2str(prevHash)))
+		l.logger.Debugw("send peekChainReq", zap.String("addr", addr), zap.String("hash", b2str(prevHash)))
 
 		ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
 		ans, err := client.PeekChain(ctx, &pb.PeekChainReq{TopHash: pb.NewHashVal(prevHash)})
@@ -400,7 +407,7 @@ findMaxSynced:
 			return
 		}
 
-		l.logger.Infow("peekChainReq responds", zap.String("addr", addr),
+		l.logger.Debugw("peekChainReq responds", zap.String("addr", addr),
 			zap.Int("numHeaders", len(ans.Headers)))
 		headersPending = ans.Headers
 	}
@@ -479,10 +486,9 @@ func (l *Miner) updateTxInfo(fullBlock *fullBlockWithHash) {
 }
 
 func (l *Miner) createBlock() *fullBlockWithHash {
-	//-----------------------
-	// mempool locked
-	//-----------------------
-	// take elements from memPool
+	//---------------------------
+	// mempool and chain rlocked
+	//---------------------------
 	l.chainMtx.RLock()
 	l.memPoolMtx.RLock()
 
@@ -504,11 +510,12 @@ func (l *Miner) createBlock() *fullBlockWithHash {
 			txList = append(txList, tx.Tx)
 		}
 	}
+	txList[0].TxOutList[0].Value = memPoolTotalFee + MinerReward
 	l.memPoolMtx.RUnlock()
 	l.chainMtx.RUnlock()
-	//-----------------------
-	// mempool unlocked
-	//-----------------------
+	//-----------------------------
+	// mempool and chain runlocked
+	//-----------------------------
 
 	n := uint64(len(txList))
 	numTotalTx := maxUInt64(power2Ceil(n), uint64(2)) // at least two transactions

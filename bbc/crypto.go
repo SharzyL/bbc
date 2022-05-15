@@ -24,6 +24,14 @@ type Hashable interface {
 	ToBytes() []byte
 }
 
+type BytesWrapper struct {
+	B []byte
+}
+
+func (b BytesWrapper) ToBytes() []byte {
+	return b.B
+}
+
 func Hash(vs ...Hashable) []byte {
 	h := NewHashState()
 	for _, v := range vs {
