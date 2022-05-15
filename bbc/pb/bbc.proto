@@ -9,6 +9,8 @@ service Miner {
   rpc AdvertiseBlock(AdvertiseBlockReq) returns (AdvertiseBlockAns);
 
   rpc GetFullBlock(HashVal) returns (FullBlock);
+  rpc FindTx(HashVal) returns (TxInfo);
+  rpc PeekChainByHeight(PeekChainByHeightReq) returns (PeekChainByHeightAns);
 
   rpc UploadTx(Tx) returns (UploadTxAns);
 }
@@ -68,7 +70,11 @@ message FullBlock {
 // PeekChain
 //--------------------
 message PeekChainReq {
-  HashVal top_hash = 1;
+  // if top_hash is present, use top_hash
+  // else use chain top
+  optional HashVal top_hash = 1;
+
+  optional int64 limit = 2;
 }
 
 message PeekChainAns {
@@ -94,3 +100,22 @@ message AdvertiseBlockAns {
 message UploadTxAns {
 
 }
+
+//--------------------
+// FindTx
+//--------------------
+message TxInfo {
+  optional BlockHeader block_header = 1;
+}
+
+//--------------------
+// PeekChainByHeight
+//--------------------
+message PeekChainByHeightReq {
+  int64 height = 1;
+}
+
+message PeekChainByHeightAns {
+  optional BlockHeader header = 1;
+}
+

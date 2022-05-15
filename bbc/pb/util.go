@@ -10,6 +10,14 @@ func NewHashVal(bytes []byte) *HashVal {
 	return &HashVal{Bytes: bytes}
 }
 
+func NewSigVal(bytes []byte) *Sig {
+	return &Sig{Bytes: bytes}
+}
+
+func NewPubKeyVal(bytes []byte) *PubKey {
+	return &PubKey{Bytes: bytes}
+}
+
 func NewMerkleTreeNode(bytes []byte) *TxMerkleNode {
 	return &TxMerkleNode{Hash: NewHashVal(bytes)}
 }

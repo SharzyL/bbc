@@ -3,7 +3,6 @@ package bbc
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
 	"fmt"
 	"math"
 	"math/rand"
@@ -26,21 +25,37 @@ type minerRpcHandler struct {
 }
 
 const avgMiningTime = 5 * time.Second
+const newBlockTime = 5 * time.Second
+
 const blockLimit = 16
+
 const adverticeTimeout = 5 * time.Second
 const rpcTimeout = 1 * time.Second
+const peekChainDefaultLimit = int64(10)
 
 func (s *minerRpcHandler) PeekChain(ctx context.Context, req *pb.PeekChainReq) (ans *pb.PeekChainAns, err error) {
 	l := s.l
 	l.logger.Infow("receive PeekChain request",
-		zap.String("hash", b2str(req.TopHash.Bytes)))
+		zap.String("hash", b2str(req.TopHash.Bytes)),
+		zap.Int64("limit", req.GetLimit()))
 	headers := make([]*pb.BlockHeader, 0, 10)
 
 	l.chainMtx.RLock()
 	defer l.chainMtx.RUnlock()
 
-	topHash := req.TopHash.Bytes
-	for i := 0; i < 10; i++ {
+	var topHash []byte
+	if req.TopHash != nil {
+		topHash = req.TopHash.Bytes
+	} else {
+		topHash = l.mainChain[len(l.mainChain)-1].Hash
+	}
+
+	limit := req.GetLimit()
+	if limit <= 0 {
+		limit = peekChainDefaultLimit
+	}
+
+	for i := int64(0); i < limit; i++ {
 		fullBlock := l.findBlockByHash(topHash)
 		if fullBlock == nil {
 			err = fmt.Errorf("cannot find block with hash %x when peekChain with depth %d", req.TopHash.Bytes, i)
@@ -55,6 +70,21 @@ func (s *minerRpcHandler) PeekChain(ctx context.Context, req *pb.PeekChainReq) (
 	}
 
 	return &pb.PeekChainAns{Headers: headers}, nil
+}
+
+func (s *minerRpcHandler) PeekChainByHeight(ctx context.Context, req *pb.PeekChainByHeightReq) (ans *pb.PeekChainByHeightAns, err error) {
+	l := s.l
+	l.logger.Infow("receive PeekChainByHeight request",
+		zap.Int64("height", req.Height))
+
+	l.chainMtx.RLock()
+	defer l.chainMtx.RUnlock()
+	if req.Height >= int64(len(l.mainChain)) {
+		return &pb.PeekChainByHeightAns{Header: nil}, nil
+	} else {
+		header := l.mainChain[req.Height].Block.Header
+		return &pb.PeekChainByHeightAns{Header: header}, nil
+	}
 }
 
 func (s *minerRpcHandler) AdvertiseBlock(ctx context.Context, req *pb.AdvertiseBlockReq) (ans *pb.AdvertiseBlockAns, err error) {
@@ -87,6 +117,17 @@ func (s *minerRpcHandler) GetFullBlock(ctx context.Context, req *pb.HashVal) (*p
 	}
 }
 
+func (s *minerRpcHandler) FindTx(ctx context.Context, hash *pb.HashVal) (*pb.TxInfo, error) {
+	l := s.l
+	l.logger.Infow("receive FindTx request", zap.String("hash", b2str(hash.Bytes)))
+	tx := l.findTxByHash(hash.Bytes)
+	if tx != nil {
+		return &pb.TxInfo{BlockHeader: tx.Block.Block.Header}, nil
+	} else {
+		return &pb.TxInfo{BlockHeader: nil}, nil
+	}
+}
+
 func (s *minerRpcHandler) UploadTx(ctx context.Context, tx *pb.Tx) (*pb.UploadTxAns, error) {
 	l := s.l
 	//l.logger.Infow("receive UploadTx request", zap.Int64("t", tx.Timestamp))
@@ -98,10 +139,10 @@ func (s *minerRpcHandler) UploadTx(ctx context.Context, tx *pb.Tx) (*pb.UploadTx
 	defer l.memPoolMtx.Unlock()
 
 	fee, err := l.verifyTx(tx)
-	txf := &txWithFee{Tx: tx, Fee: fee}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("fail to verify tx: %v", err)
 	}
+	txf := &txWithFee{Tx: tx, Fee: fee}
 
 	l.memPool = append(l.memPool, txf)
 	if len(l.memPool) >= blockLimit-1 { // reserve one space for coinbase
@@ -141,15 +182,9 @@ type Miner struct {
 	logger *zap.SugaredLogger
 }
 
-func NewMiner(selfAddr string, peerAddrList []string) *Miner {
+func NewMiner(pubKey []byte, privKey []byte, selfAddr string, peerAddrList []string) *Miner {
 	logger, _ := zap.NewDevelopment()
 	sugarLogger := logger.Sugar()
-	pubKey, privKey, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		sugarLogger.Panicw("cannot gen key", zap.Error(err))
-	} else {
-		sugarLogger.Infow("gen key for miner", zap.String("pubKey", b2str(pubKey)))
-	}
 
 	memPoolMtx := &sync.RWMutex{}
 	chainMtx := &sync.RWMutex{}
@@ -194,7 +229,10 @@ func (l *Miner) MainLoop() {
 
 	for {
 		// wait for new transactions fill the mempool
-		<-memPoolFullChan
+		select {
+		case <-memPoolFullChan:
+		case <-time.After(newBlockTime):
+		}
 
 		// create new block
 		newBlock := l.createBlock()
@@ -443,10 +481,6 @@ func (l *Miner) createBlock() *fullBlockWithHash {
 	for _, tx := range memPool {
 		memPoolTotalFee += tx.Fee
 	}
-	if len(memPool) <= 1 {
-		l.logger.Errorw("do not create an empty block")
-		return nil
-	}
 	l.memPool = l.memPool[numTx:]
 
 	// recover all memPool if creating new block failed
@@ -470,8 +504,8 @@ func (l *Miner) createBlock() *fullBlockWithHash {
 		txList = append(txList, tx.Tx)
 	}
 	n := uint64(len(txList))
-	numTotalTx := power2Ceil(n)
-	for i := n; i < numTotalTx; i++ {
+	numTotalTx := maxUInt64(power2Ceil(n), uint64(2)) // at least two transactions
+	for i := n; i < numTotalTx; i++ {                 // padding with empty transactions
 		txList = append(txList, &pb.Tx{})
 	}
 
@@ -512,6 +546,14 @@ func (l *Miner) createBlock() *fullBlockWithHash {
 		TxList:     txList,
 		MerkleTree: merkleTree,
 	}
+	l.logger.Infow("start mining a block",
+		zap.String("prevHash", b2str(prevBlock.Hash)),
+		zap.String("merkleRoot", b2str(merkleRootHash)),
+		zap.Int64("timestamp", timestamp),
+		zap.Int64("height", b.Header.Height),
+		zap.Int("numTx", len(b.TxList)),
+		zap.Uint64("numValidTx", n),
+	)
 	l.mine(b) // it takes a long time!
 
 	//-----------------------
@@ -525,6 +567,7 @@ func (l *Miner) createBlock() *fullBlockWithHash {
 		fb := makeFullBlockWithHash(b)
 		l.mainChain = append(l.mainChain, fb)
 		l.hashToBlock.Insert(Hash(b.Header), b)
+		l.updateTxInfo(fb)
 		success = true
 		l.logger.Infow("new mined block added to main chain",
 			zap.Int64("height", fb.Block.Header.Height),
@@ -541,16 +584,8 @@ func (l *Miner) createBlock() *fullBlockWithHash {
 }
 
 func (l *Miner) mine(b *pb.FullBlock) {
-	l.logger.Infow("start mining a block",
-		zap.String("prevHash", b2str(b.Header.PrevHash.Bytes)),
-		zap.String("merkleRoot", b2str(b.Header.MerkleRoot.Bytes)),
-		zap.Int64("timestamp", b.Header.Timestamp),
-		zap.Int64("height", b.Header.Height),
-		zap.Int("numTx", len(b.TxList)),
-	)
 	miningTime := -math.Log(rand.Float64()) * float64(avgMiningTime)
 	time.Sleep(time.Duration(miningTime))
-	l.logger.Infow("mine out a block", zap.Int64("height", b.Header.Height))
 
 	b.Header.BlockNounce = make([]byte, NounceLen)
 }
@@ -645,7 +680,7 @@ func (l *Miner) isTxOutSpent(t *txWithConsumer, txOutIdx uint32) error {
 func (l *Miner) verifyTx(t *pb.Tx) (minerFee uint64, err error) {
 	totalInput := uint64(0)
 	for i, txin := range t.TxInList {
-		if prevTxW := l.findTxByHash(txin.PrevTx.Bytes); prevTxW != nil {
+		if prevTxW := l.findTxByHash(txin.PrevTx.Bytes); prevTxW == nil {
 			return 0, fmt.Errorf("cannot find tx of hash [%x]", txin.PrevTx.Bytes)
 		} else {
 			err := l.isTxOutSpent(prevTxW, txin.PrevOutIdx)
