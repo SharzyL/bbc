@@ -183,8 +183,7 @@ type Miner struct {
 }
 
 func NewMiner(pubKey []byte, privKey []byte, selfAddr string, peerAddrList []string) *Miner {
-	logger, _ := zap.NewDevelopment()
-	sugarLogger := logger.Sugar()
+	logger := getLogger()
 
 	memPoolMtx := &sync.RWMutex{}
 	chainMtx := &sync.RWMutex{}
@@ -208,7 +207,7 @@ func NewMiner(pubKey []byte, privKey []byte, selfAddr string, peerAddrList []str
 		memPoolMtx: memPoolMtx,
 		chainMtx:   chainMtx,
 
-		logger: sugarLogger,
+		logger: logger,
 	}
 	miner.rpcHandler.l = &miner
 
@@ -216,7 +215,7 @@ func NewMiner(pubKey []byte, privKey []byte, selfAddr string, peerAddrList []str
 	miner.hashToBlock.Insert(genesisBlock.Hash, genesisBlock.Block)
 	miner.mainChain = append(miner.mainChain, genesisBlock)
 
-	sugarLogger.Infow("add genesis block", zap.String("hash", b2str(genesisBlock.Hash)))
+	logger.Infow("add genesis block", zap.String("hash", b2str(genesisBlock.Hash)))
 	return &miner
 }
 

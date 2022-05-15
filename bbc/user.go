@@ -18,13 +18,12 @@ type User struct {
 }
 
 func NewUser(pubKey []byte, privKey []byte, servers []string) *User {
-	logger, _ := zap.NewDevelopment()
-	sugarLogger := logger.Sugar()
+	logger := getLogger()
 
 	return &User{
 		privKey: privKey,
 		pubKey:  pubKey,
-		logger:  sugarLogger,
+		logger:  logger,
 		servers: servers,
 	}
 }
