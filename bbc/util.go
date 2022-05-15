@@ -5,12 +5,40 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"math/bits"
+	"os"
 )
 
 func getLogger() *zap.SugaredLogger {
 	config := zap.NewDevelopmentConfig()
+
+	loglevelStr := os.Getenv("LOG_LEVEL")
+	if len(loglevelStr) == 0 {
+		loglevelStr = "INFO"
+	}
+	var loglevel zapcore.Level
+	switch loglevelStr {
+	case "DEBUG":
+		loglevel = zap.DebugLevel
+	case "INFO":
+		loglevel = zap.InfoLevel
+	case "WARNING":
+		loglevel = zap.WarnLevel
+	case "ERROR":
+		loglevel = zap.ErrorLevel
+	case "DPANIC":
+		loglevel = zap.DPanicLevel
+	case "PANIC":
+		loglevel = zap.PanicLevel
+	case "FATAL":
+		loglevel = zap.FatalLevel
+	default:
+		panic(fmt.Sprintf("unknown log level '%s'", loglevelStr))
+	}
+
+	config.Level.SetLevel(loglevel)
 	config.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
 	logger, _ := config.Build()
+	logger.Info("start logging", zap.String("level", loglevelStr))
 	return logger.Sugar()
 }
 

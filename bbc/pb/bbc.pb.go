@@ -651,7 +651,7 @@ func (x *PeekChainAns) GetHeaders() []*BlockHeader {
 }
 
 //--------------------
-// AdverticeBlock
+// AdvertiseBlock
 //--------------------
 type AdvertiseBlockReq struct {
 	state         protoimpl.MessageState
@@ -747,7 +747,7 @@ func (*AdvertiseBlockAns) Descriptor() ([]byte, []int) {
 }
 
 //--------------------
-// AdverticeBlock
+// AdvertiseBlock
 //--------------------
 type UploadTxAns struct {
 	state         protoimpl.MessageState

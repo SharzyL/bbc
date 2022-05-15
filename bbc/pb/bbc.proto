@@ -83,7 +83,7 @@ message PeekChainAns {
 }
 
 //--------------------
-// AdverticeBlock
+// AdvertiseBlock
 //--------------------
 message AdvertiseBlockReq {
   BlockHeader header = 1;
@@ -95,7 +95,7 @@ message AdvertiseBlockAns {
 }
 
 //--------------------
-// AdverticeBlock
+// AdvertiseBlock
 //--------------------
 message UploadTxAns {
 

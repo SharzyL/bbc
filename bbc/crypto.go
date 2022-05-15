@@ -1,15 +1,22 @@
 package bbc
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha512"
 	"hash"
+	"math/bits"
+	"math/rand"
+
+	"go.uber.org/atomic"
+
+	"github.com/SharzyL/bbc/bbc/pb"
 )
 
 const HashLen = sha512.Size               // 64
 const PubKeyLen = ed25519.PublicKeySize   // 32
 const PrivKeyLen = ed25519.PrivateKeySize // 64
-const SigLen = ed25519.SignatureSize
+const SigLen = ed25519.SignatureSize      // 64
 const NounceLen = 64
 
 const MinerReward = uint64(10000)
@@ -50,4 +57,33 @@ func Sign(s Signable, sk []byte) []byte {
 
 func Verify(s Signable, pk []byte, sig []byte) bool {
 	return ed25519.Verify(pk, s.ToSigMsgBytes(), sig)
+}
+
+func Mine(b *pb.BlockHeader, interrupter *atomic.Bool, prefixLen int) (success bool) {
+	headerBytes := b.ToBytes()
+	hasher := NewHashState()
+	nounceStartIdx := len(headerBytes) - NounceLen
+
+	prefixByteLen := prefixLen / 8
+	zeroBytes := make([]byte, prefixByteLen)
+	zeroBits := prefixLen % 8
+
+	for {
+		for i := 0; i < 100000; i++ {
+			hasher.Reset()
+			rand.Read(headerBytes[nounceStartIdx:])
+			_, _ = hasher.Write(headerBytes)
+			hashVal := hasher.Sum(nil)
+			if bytes.Equal(hashVal[:prefixByteLen], zeroBytes) {
+				if zeroBits == 0 || bits.LeadingZeros8(hashVal[prefixByteLen]) >= zeroBits {
+					b.BlockNounce = headerBytes[nounceStartIdx:]
+					return true
+				}
+			}
+		}
+		if interrupter.Load() {
+			interrupter.Store(false)
+			return false
+		}
+	}
 }

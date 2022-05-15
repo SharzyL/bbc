@@ -4,12 +4,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"math"
-	"math/rand"
 	"net"
 	"sync"
 	"time"
 
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
@@ -36,8 +35,9 @@ type Miner struct {
 	rpcHandler  minerRpcHandler
 	peerClients []*pb.MinerClient
 
-	memPoolMtx *sync.RWMutex
-	chainMtx   *sync.RWMutex
+	memPoolMtx      *sync.RWMutex
+	chainMtx        *sync.RWMutex
+	miningInterrupt *atomic.Bool // used to interrupt mining when current mining may become unnecessary
 
 	logger *zap.SugaredLogger
 }
@@ -64,8 +64,9 @@ func NewMiner(pubKey []byte, privKey []byte, selfAddr string, peerAddrList []str
 
 		rpcHandler: minerRpcHandler{}, // init self pointer later
 
-		memPoolMtx: memPoolMtx,
-		chainMtx:   chainMtx,
+		memPoolMtx:      memPoolMtx,
+		chainMtx:        chainMtx,
+		miningInterrupt: atomic.NewBool(false),
 
 		logger: logger,
 	}
@@ -94,9 +95,12 @@ func (l *Miner) MainLoop() {
 		}
 
 		// create new block
-		newBlock := l.createBlock()
-		if newBlock != nil {
-			newBlockChan <- newBlock
+		for {
+			newBlock := l.createBlock()
+			if newBlock != nil {
+				newBlockChan <- newBlock
+				break
+			}
 		}
 	}
 }
@@ -125,7 +129,7 @@ func (l *Miner) advertiseLoop(newBlockChan <-chan *fullBlockWithHash) {
 		var blockToAdvertise *fullBlockWithHash
 		select {
 		case blockToAdvertise = <-newBlockChan:
-		case <-time.After(adverticeTimeout):
+		case <-time.After(advertiseTimeout):
 			l.chainMtx.RLock()
 			blockToAdvertise = l.mainChain[len(l.mainChain)-1]
 			l.chainMtx.RUnlock()
@@ -154,7 +158,7 @@ func (l *Miner) advertiseLoop(newBlockChan <-chan *fullBlockWithHash) {
 
 				ctx, cancel = context.WithTimeout(context.Background(), rpcTimeout)
 				defer cancel()
-				l.logger.Debugw("advertice block to peer",
+				l.logger.Debugw("advertise block to peer",
 					zap.Int64("height", blockToAdvertise.Block.Header.Height),
 					zap.String("hash", b2str(blockToAdvertise.Hash)),
 					zap.String("peer", addr))
@@ -299,6 +303,7 @@ findMaxSynced:
 		l.mainChain = append(l.mainChain, b)
 		l.hashToBlock.Insert(b.Hash, b.Block)
 		l.updateTxInfo(b)
+		l.miningInterrupt.Store(true)
 	}
 	success = true
 	l.logger.Infow("success to sync block",
@@ -409,7 +414,13 @@ func (l *Miner) createBlock() *fullBlockWithHash {
 		zap.Int("numTx", len(b.TxList)),
 		zap.Uint64("numValidTx", n),
 	)
-	l.mine(b) // it takes a long time!
+
+	// start mining, takes a long time!
+	suc := Mine(b.Header, l.miningInterrupt, miningDifficulty)
+	if !suc {
+		l.logger.Infow("mining interrupted")
+		return nil
+	}
 
 	//-----------------------
 	// chain locked
@@ -445,13 +456,6 @@ func (l *Miner) createBlock() *fullBlockWithHash {
 	//-----------------------
 	// chain unlocked
 	//-----------------------
-}
-
-func (l *Miner) mine(b *pb.FullBlock) {
-	miningTime := -math.Log(rand.Float64()) * float64(avgMiningTime)
-	time.Sleep(time.Duration(miningTime))
-
-	b.Header.BlockNounce = make([]byte, NounceLen)
 }
 
 func (l *Miner) verifyBlock(b *pb.FullBlock) error {
@@ -551,7 +555,6 @@ func (l *Miner) isBlockOnChain(b *fullBlockWithHash) bool {
 }
 
 func (l *Miner) verifyTx(t *pb.Tx) (minerFee uint64, err error) {
-	// TODO: discards transactions appearing in previous block
 	totalInput := uint64(0)
 	for i, txin := range t.TxInList {
 		if prevTxW := l.findTxByHash(txin.PrevTx.Bytes); prevTxW == nil {
