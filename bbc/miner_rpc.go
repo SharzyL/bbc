@@ -18,6 +18,8 @@ type minerRpcHandler struct {
 	memPoolFullChan chan<- struct{}
 }
 
+// TODO: check input array length when receiving requests
+
 func (s *minerRpcHandler) PeekChain(ctx context.Context, req *pb.PeekChainReq) (ans *pb.PeekChainAns, err error) {
 	l := s.l
 
@@ -164,4 +166,37 @@ func (s *minerRpcHandler) UploadTx(ctx context.Context, tx *pb.Tx) (*pb.UploadTx
 		zap.Uint64("fee", fee),
 		zap.Int("l", len(l.memPool)))
 	return &pb.UploadTxAns{}, nil
+}
+
+func (s *minerRpcHandler) LookupUtxo(ctx context.Context, pubKey *pb.PubKey) (*pb.LookupUtxoAns, error) {
+	l := s.l
+	if pubKey == nil || len(pubKey.Bytes) != PubKeyLen {
+		return nil, fmt.Errorf("invalid pubkey")
+	}
+	l.chainMtx.RLock()
+	chain := l.mainChain
+	defer l.chainMtx.RUnlock()
+
+	var utxoList []*pb.Utxo
+	for _, b := range chain {
+		for _, tx := range b.Block.TxList {
+			if !tx.Valid {
+				continue
+			}
+			txHash := Hash(tx)
+			txw := l.findTxByHash(txHash)
+
+			for i, txOut := range tx.TxOutList {
+				if err := l.isTxOutSpent(txw, uint32(i)); err == nil && bytes.Equal(pubKey.Bytes, txOut.ReceiverPubKey.Bytes) {
+					utxoList = append(utxoList, &pb.Utxo{
+						Value:    txOut.Value,
+						TxHash:   pb.NewHashVal(txHash),
+						TxOutIdx: uint32(i),
+						PubKey:   txOut.ReceiverPubKey,
+					})
+				}
+			}
+		}
+	}
+	return &pb.LookupUtxoAns{UtxoList: utxoList}, nil
 }

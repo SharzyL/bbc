@@ -28,6 +28,7 @@ type MinerClient interface {
 	FindTx(ctx context.Context, in *HashVal, opts ...grpc.CallOption) (*TxInfo, error)
 	PeekChainByHeight(ctx context.Context, in *PeekChainByHeightReq, opts ...grpc.CallOption) (*PeekChainByHeightAns, error)
 	UploadTx(ctx context.Context, in *Tx, opts ...grpc.CallOption) (*UploadTxAns, error)
+	LookupUtxo(ctx context.Context, in *PubKey, opts ...grpc.CallOption) (*LookupUtxoAns, error)
 }
 
 type minerClient struct {
@@ -92,6 +93,15 @@ func (c *minerClient) UploadTx(ctx context.Context, in *Tx, opts ...grpc.CallOpt
 	return out, nil
 }
 
+func (c *minerClient) LookupUtxo(ctx context.Context, in *PubKey, opts ...grpc.CallOption) (*LookupUtxoAns, error) {
+	out := new(LookupUtxoAns)
+	err := c.cc.Invoke(ctx, "/bbc_proto.Miner/LookupUtxo", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MinerServer is the server API for Miner service.
 // All implementations must embed UnimplementedMinerServer
 // for forward compatibility
@@ -102,6 +112,7 @@ type MinerServer interface {
 	FindTx(context.Context, *HashVal) (*TxInfo, error)
 	PeekChainByHeight(context.Context, *PeekChainByHeightReq) (*PeekChainByHeightAns, error)
 	UploadTx(context.Context, *Tx) (*UploadTxAns, error)
+	LookupUtxo(context.Context, *PubKey) (*LookupUtxoAns, error)
 	mustEmbedUnimplementedMinerServer()
 }
 
@@ -126,6 +137,9 @@ func (UnimplementedMinerServer) PeekChainByHeight(context.Context, *PeekChainByH
 }
 func (UnimplementedMinerServer) UploadTx(context.Context, *Tx) (*UploadTxAns, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UploadTx not implemented")
+}
+func (UnimplementedMinerServer) LookupUtxo(context.Context, *PubKey) (*LookupUtxoAns, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method LookupUtxo not implemented")
 }
 func (UnimplementedMinerServer) mustEmbedUnimplementedMinerServer() {}
 
@@ -248,6 +262,24 @@ func _Miner_UploadTx_Handler(srv interface{}, ctx context.Context, dec func(inte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Miner_LookupUtxo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PubKey)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MinerServer).LookupUtxo(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/bbc_proto.Miner/LookupUtxo",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MinerServer).LookupUtxo(ctx, req.(*PubKey))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Miner_ServiceDesc is the grpc.ServiceDesc for Miner service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -278,6 +310,10 @@ var Miner_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UploadTx",
 			Handler:    _Miner_UploadTx_Handler,
+		},
+		{
+			MethodName: "LookupUtxo",
+			Handler:    _Miner_LookupUtxo_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

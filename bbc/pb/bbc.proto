@@ -13,6 +13,7 @@ service Miner {
   rpc PeekChainByHeight(PeekChainByHeightReq) returns (PeekChainByHeightAns);
 
   rpc UploadTx(Tx) returns (UploadTxAns);
+  rpc LookupUtxo(PubKey) returns (LookupUtxoAns);
 }
 
 // basic types
@@ -119,3 +120,16 @@ message PeekChainByHeightAns {
   optional BlockHeader header = 1;
 }
 
+//--------------------
+// LookupUtxo
+//--------------------
+message Utxo {
+  uint64 value = 1;
+  HashVal tx_hash = 2;
+  uint32 tx_out_idx = 3;
+  PubKey pub_key = 4;
+}
+
+message LookupUtxoAns {
+  repeated Utxo utxo_list = 1;
+}
