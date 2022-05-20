@@ -220,6 +220,11 @@ func (x *SpendCmd) Execute(args []string) error {
 	return nil
 }
 
+type GlobalOpts struct {
+	PrivKey string `long:"sk" required:"true"`
+	PubKey  string `long:"pk" required:"true"`
+}
+
 func main() {
 	pubKey, _ := hex.DecodeString("e67af31affc28963b331eca5409e7d33b1c1d4b35aeb5b4db0c2be320095f81c")
 	privKey, _ := hex.DecodeString("552d9e1e0250d975ff4b6129a5d1bf3f7dec9e85b20862af3eed4a1ffc542bd6e67af31affc28963b331eca5409e7d33b1c1d4b35aeb5b4db0c2be320095f81c")
@@ -228,11 +233,11 @@ func main() {
 		PrivKey:  privKey,
 		UtxoList: []*pb.Utxo{},
 	}
-	parser := flags.NewNamedParser("viewer", flags.Default)
 	var blockCommand BlockCmd
 	var ShowCommand ShowCmd
 	var spendCommand SpendCmd
 
+	parser := flags.NewNamedParser("viewer", flags.Default)
 	_, _ = parser.AddCommand("block", "view block", "view block", &blockCommand)
 	_, _ = parser.AddCommand("show", "show account", "show account", &ShowCommand)
 	_, _ = parser.AddCommand("spend", "spend money", "spend money", &spendCommand)

@@ -1,16 +1,24 @@
 package main
 
 import (
-	"encoding/hex"
-	"github.com/SharzyL/bbc/bbc"
-	"github.com/jessevdk/go-flags"
+	"context"
+	"fmt"
+	"log"
 	"os"
+	"sync"
+	"time"
+
+	"github.com/jessevdk/go-flags"
+	"google.golang.org/grpc"
+
+	"github.com/SharzyL/bbc/bbc"
+	"github.com/SharzyL/bbc/bbc/pb"
 )
 
 func main() {
 	var opts struct {
-		IntervalMs int      `short:"f" long:"freq" default:"100"`
-		Servers    []string `short:"p" long:"peer"`
+		IntervalMs int    `short:"f" long:"freq" default:"100"`
+		Miner      string `short:"m" long:"miner" required:"true"`
 	}
 	_, err := flags.Parse(&opts)
 	if err != nil {
@@ -20,9 +28,52 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	pubKey, _ := hex.DecodeString("e67af31affc28963b331eca5409e7d33b1c1d4b35aeb5b4db0c2be320095f81c")
-	privKey, _ := hex.DecodeString("552d9e1e0250d975ff4b6129a5d1bf3f7dec9e85b20862af3eed4a1ffc542bd6e67af31affc28963b331eca5409e7d33b1c1d4b35aeb5b4db0c2be320095f81c")
+	tx := &pb.Tx{
+		Valid:     true,
+		TxInList:  []*pb.TxIn{},
+		TxOutList: []*pb.TxOut{},
+		Timestamp: time.Now().UnixMilli(),
+	}
+	totalWorks := 500
+	poolSize := 20
+	pool := make(chan struct{}, poolSize)
+	startTime := time.Now()
 
-	miner := bbc.NewUser(pubKey, privKey, opts.Servers)
-	miner.MainLoop()
+	wg := sync.WaitGroup{}
+	wg.Add(totalWorks)
+	for i := 0; i < totalWorks; i++ {
+		go func(i int) {
+			pool <- struct{}{}
+			defer func() {
+				<-pool
+			}()
+
+			log.Printf("start %d", i)
+			grStartTime := time.Now()
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), bbc.DefaultRpcTimeout)
+			defer cancel()
+			conn, err := grpc.DialContext(ctx, opts.Miner, grpc.WithInsecure(), grpc.WithBlock())
+			if err != nil {
+				log.Panicf("failed to dial peer: %v", err)
+				return
+			}
+			defer conn.Close()
+
+			client := pb.NewMinerClient(conn)
+
+			ctx, cancel = context.WithTimeout(context.Background(), bbc.DefaultRpcTimeout)
+			defer cancel()
+
+			_, err = client.UploadTx(ctx, tx)
+			if err != nil {
+				log.Panicf("fail to upload tx to server: %v", err)
+			}
+			log.Printf("end %d after %d ms", i, time.Now().Sub(grStartTime).Milliseconds())
+		}(i)
+	}
+	wg.Wait()
+
+	totalTime := time.Now().Sub(startTime)
+	fmt.Printf("finish after %d ms\n", totalTime.Milliseconds())
 }

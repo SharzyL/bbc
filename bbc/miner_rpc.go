@@ -158,7 +158,7 @@ func (s *minerRpcHandler) UploadTx(ctx context.Context, tx *pb.Tx) (*pb.UploadTx
 	if len(l.memPool) >= blockLimit-1 { // reserve one space for coinbase
 		select {
 		case s.memPoolFullChan <- struct{}{}:
-		case <-time.After(100 * time.Millisecond):
+		case <-time.After(time.Millisecond):
 		}
 	}
 	l.logger.Debugw("finish receiving tx",

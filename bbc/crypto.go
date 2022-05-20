@@ -57,6 +57,11 @@ func Verify(s Signable, pk []byte, sig []byte) bool {
 	return ed25519.Verify(pk, s.ToSigMsgBytes(), sig)
 }
 
+func GenKey() ([]byte, []byte) {
+	pubKey, privKey, _ := ed25519.GenerateKey(nil)
+	return pubKey, privKey
+}
+
 func Mine(h *pb.BlockHeader, interrupter *atomic.Bool, prefixLen int) (success bool) {
 	headerBytes := h.ToBytes()
 	hasher := NewHashState()
