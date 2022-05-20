@@ -2,7 +2,7 @@ package bbc
 
 import (
 	"crypto/ed25519"
-	"crypto/sha512"
+	"crypto/sha256"
 	"hash"
 	"math/rand"
 
@@ -11,7 +11,7 @@ import (
 	"github.com/SharzyL/bbc/bbc/pb"
 )
 
-const HashLen = sha512.Size               // 64
+const HashLen = sha256.Size               // 64
 const PubKeyLen = ed25519.PublicKeySize   // 32
 const PrivKeyLen = ed25519.PrivateKeySize // 64
 const SigLen = ed25519.SignatureSize      // 64
@@ -22,7 +22,7 @@ const MinerReward = uint64(10000)
 type HashState = hash.Hash
 
 func NewHashState() HashState {
-	return sha512.New()
+	return sha256.New()
 }
 
 type Hashable interface {
