@@ -20,8 +20,13 @@ type minerRpcHandler struct {
 
 func (s *minerRpcHandler) PeekChain(ctx context.Context, req *pb.PeekChainReq) (ans *pb.PeekChainAns, err error) {
 	l := s.l
+
+	reqHashStr := "nil"
+	if req.TopHash != nil {
+		reqHashStr = b2str(req.TopHash.Bytes)
+	}
 	l.logger.Debugw("receive PeekChain request",
-		zap.String("hash", b2str(req.TopHash.Bytes)),
+		zap.String("hash", reqHashStr),
 		zap.Int64("limit", req.GetLimit()))
 	headers := make([]*pb.BlockHeader, 0, 10)
 
@@ -98,7 +103,7 @@ func (s *minerRpcHandler) AdvertiseBlock(ctx context.Context, req *pb.AdvertiseB
 
 func (s *minerRpcHandler) GetFullBlock(ctx context.Context, req *pb.HashVal) (*pb.FullBlock, error) {
 	l := s.l
-	l.logger.Debugw("receive getFullBlock request",
+	l.logger.Debugw("receive GetFullBlock request",
 		zap.String("hash", b2str(req.Bytes)))
 	b := l.findBlockByHash(req.Bytes)
 	if b == nil {

@@ -106,7 +106,11 @@ func maxInt(a, b int) int {
 }
 
 func b2str(b []byte) string {
-	return fmt.Sprintf("%x", b)[:16]
+	if b != nil {
+		return fmt.Sprintf("%x", b)[:16]
+	} else {
+		return "<nil>"
+	}
 }
 
 func hasLeadingZeros(b []byte, len int) bool {

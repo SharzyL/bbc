@@ -1,6 +1,9 @@
 package bbc
 
-import "github.com/SharzyL/bbc/bbc/pb"
+import (
+	"github.com/SharzyL/bbc/bbc/pb"
+	"time"
+)
 
 func GenesisBlock() *pb.FullBlock {
 	zeroHash := [HashLen]byte{}
@@ -28,6 +31,7 @@ func CoinBaseTx(minerPubKey []byte, val uint64) *pb.Tx {
 	}
 	return &pb.Tx{
 		Valid:     true,
+		Timestamp: time.Now().UnixMilli(),
 		TxInList:  []*pb.TxIn{},
 		TxOutList: []*pb.TxOut{txOut},
 	}

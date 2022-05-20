@@ -306,8 +306,8 @@ findMaxSynced:
 		l.miningInterrupt.Store(true)
 	}
 	success = true
-	l.logger.Infow("success to sync block",
-		zap.String("addr", addr), zap.Int("height", len(l.mainChain)), zap.Int64("from", minUnsynced))
+	l.logger.Infow("success to sync block from peer",
+		zap.String("peerAddr", addr), zap.Int("height", len(l.mainChain)), zap.Int64("fromHeight", minUnsynced))
 	//----------------------
 	// chain unlocked
 	//----------------------
@@ -416,10 +416,17 @@ func (l *Miner) createBlock() *fullBlockWithHash {
 	)
 
 	// start mining, takes a long time!
+	startMineTime := time.Now()
 	suc := Mine(b.Header, l.miningInterrupt, miningDifficulty)
+	miningTime := time.Now().Sub(startMineTime).Seconds()
 	if !suc {
-		l.logger.Infow("mining interrupted")
+		l.logger.Infow("mining interrupted", zap.Float64("usedTime", miningTime))
 		return nil
+	} else {
+		l.logger.Infow("mined a new block",
+			zap.Float64("usedTime", miningTime),
+			zap.String("nounce", b2str(b.Header.BlockNounce)),
+		)
 	}
 
 	//-----------------------
@@ -446,12 +453,15 @@ func (l *Miner) createBlock() *fullBlockWithHash {
 		//-----------------------
 
 		l.logger.Infow("new mined block added to main chain",
-			zap.String("nounce", b2str(fb.Block.Header.BlockNounce)),
+			zap.String("nounce", b2str(b.Header.BlockNounce)),
 			zap.Int64("height", fb.Block.Header.Height),
 			zap.String("hash", b2str(fb.Hash)))
 		return fb
 	} else {
-		l.logger.Infow("mined block is superceded", zap.Int("h", len(l.mainChain)-1))
+		l.logger.Infow("mined block is superceded",
+			zap.Int64("blockHeight", b.Header.Height),
+			zap.Int("chainHeight", len(l.mainChain)-1),
+		)
 		return nil
 	}
 	//-----------------------
