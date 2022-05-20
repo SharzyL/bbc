@@ -16,7 +16,7 @@ import (
 	"github.com/SharzyL/bbc/bbc/trie"
 )
 
-// Miner should be not be initialized manually
+// Miner should be not be initialized manually, use NewMiner instead
 type Miner struct {
 	SelfAddr     string // network addr of self
 	PeerAddrList []string
@@ -98,7 +98,7 @@ func (l *Miner) MainLoop() {
 		for {
 			newBlock := l.createBlock()
 			if newBlock != nil {
-				newBlockChan <- newBlock
+				newBlockChan <- newBlock // send new block to advertise thread
 				break
 			}
 		}
@@ -195,7 +195,7 @@ func (l *Miner) findBlockByHash(hash []byte) *pb.FullBlock {
 }
 
 func (l *Miner) syncBlock(addr string, topHeader *pb.BlockHeader) {
-	// prerequisite: topHeader.length > mainCHain.length, topHeader.top != mainChain.top
+	// prerequisite: topHeader.length >= mainCHain.length, topHeader.top != mainChain.top
 
 	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
 	defer cancel()

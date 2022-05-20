@@ -154,9 +154,9 @@ func (s *minerRpcHandler) UploadTx(ctx context.Context, tx *pb.Tx) (*pb.UploadTx
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	//l.logger.Infow("finish receiving tx",
-	//	zap.Int64("t", tx.Timestamp),
-	//	zap.Uint64("fee", fee),
-	//	zap.Int("l", len(l.memPool)))
+	l.logger.Debugw("finish receiving tx",
+		zap.Int64("t", tx.Timestamp),
+		zap.Uint64("fee", fee),
+		zap.Int("l", len(l.memPool)))
 	return &pb.UploadTxAns{}, nil
 }
