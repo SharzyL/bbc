@@ -143,6 +143,10 @@ func (s *minerRpcHandler) UploadTx(ctx context.Context, tx *pb.Tx) (*pb.UploadTx
 	if err != nil {
 		return nil, fmt.Errorf("fail to verify tx: %v", err)
 	}
+	requiredFee := uint64(len(tx.TxOutList)+len(tx.TxInList)) * feePerTx
+	if fee < requiredFee {
+		return nil, fmt.Errorf("fee not enough, expected at least %d, actual %d", requiredFee, fee)
+	}
 	// TODO: imporve efficiency for verifying if txIn is used by something else in the pool
 	for _, txIn := range tx.TxInList {
 		for _, memPoolTx := range l.memPool {

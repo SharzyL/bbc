@@ -510,17 +510,36 @@ func (l *Miner) getDifficulty(chain []*fullBlockWithHash, height int64) uint64 {
 }
 
 func (l *Miner) verifyBlock(b *pb.FullBlock) error {
+	header := b.Header
+	h := header.Height
+	prevHeader := l.mainChain[h-1].Block.Header
+	prevHash := l.mainChain[h-1].Hash
+
+	// verify timestamp
+	if header.Timestamp < prevHeader.Timestamp { // asssuption is that genesis block is very early
+		return fmt.Errorf("block timestamp %d is smaller than prev %d", header.Timestamp, prevHeader.Timestamp)
+	}
+	nowMs := time.Now().UnixMilli()
+	if header.Timestamp > nowMs+maxTimeErrorAllowed.Milliseconds() {
+		return fmt.Errorf("block timestamp %d is from future (current %d)", header.Timestamp, nowMs)
+	}
+
+	// verify prevHash
+	if !bytes.Equal(prevHash, header.PrevHash.Bytes) {
+		return fmt.Errorf("prevHash %x not consistent with that on chain %x", b2str(prevHash), b2str(header.PrevHash.Bytes))
+	}
+
 	// verify size
 	if len(b.TxList) < 2 {
-		return fmt.Errorf("block should contain at least two transactions")
+		return fmt.Errorf("block should contain at least two transactions, actual %d", len(b.TxList))
 	}
 	d := log2Floor(uint64(len(b.TxList)))
 	numTx := 1 << d
 	if len(b.TxList) != numTx {
-		return fmt.Errorf("num of transactions not a power of 2")
+		return fmt.Errorf("num of transactions %d not a power of 2", len(b.TxList))
 	}
 	if len(b.MerkleTree) != 2*numTx-2 {
-		return fmt.Errorf("len of merkle tree not consistent with num of tx")
+		return fmt.Errorf("len of merkle tree %d not consistent with num of tx %d", len(b.MerkleTree), numTx)
 	}
 
 	// verify hash of transaction
@@ -612,6 +631,10 @@ func (l *Miner) isBlockOnChain(b *fullBlockWithHash) bool {
 }
 
 func (l *Miner) verifyTx(t *pb.Tx) (minerFee uint64, err error) {
+	nowMs := time.Now().UnixMilli()
+	if t.Timestamp > nowMs+maxTimeErrorAllowed.Milliseconds() {
+		return 0, fmt.Errorf("tx (timestamp %d) from the future (now %d)", t.Timestamp, nowMs)
+	}
 	totalInput := uint64(0)
 	for i, txin := range t.TxInList {
 		if len(txin.Sig.Bytes) != SigLen {
