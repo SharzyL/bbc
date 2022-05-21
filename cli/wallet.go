@@ -158,13 +158,13 @@ func (w *Wallet) CmdChain(height int64) {
 	bbc.PrintBlock(block, 0)
 }
 
-func (w *Wallet) CmdShow(verbose bool) {
+func (w *Wallet) CmdBalance(showUtxo bool) {
 	w.ConnectOne()
 	w.GetUtxo()
 	fmt.Printf("pubkey: %x\n", w.PubKey)
 	balance := uint64(0)
 	for i, utxo := range w.UtxoList {
-		if verbose {
+		if showUtxo {
 			fmt.Printf("Utxo %d:\n", i)
 			bbc.PrintUtxo(utxo, 2)
 		}
@@ -207,13 +207,13 @@ func (w *Wallet) CmdTransfer(toAddr string, value uint64, fee uint64, nowait boo
 	}
 	txOut := &pb.TxOut{
 		Value:          value,
-		ReceiverPubKey: &pb.PubKey{Bytes: w.PubKey},
+		ReceiverPubKey: &pb.PubKey{Bytes: addr},
 	}
 	txOutList = append(txOutList, txOut)
 	if totalUtxoValue > value {
 		txOut2 := &pb.TxOut{
 			Value:          totalUtxoValue - value, // TODO: add miner fee
-			ReceiverPubKey: &pb.PubKey{Bytes: addr},
+			ReceiverPubKey: &pb.PubKey{Bytes: w.PubKey},
 		}
 		txOutList = append(txOutList, txOut2)
 	}
@@ -267,8 +267,8 @@ type walletArgs struct {
 	Chain  struct {
 		Height int64 `short:"l" default:"-1"`
 	} `cmd:""`
-	Show struct {
-		Verbose bool `short:"v"`
+	Balance struct {
+		Utxo bool `short:"u"`
 	} `cmd:""`
 	Transfer struct {
 		To     string `short:"t" required:"true"`
@@ -302,8 +302,8 @@ func main() {
 		fmt.Printf("{\n    \"pubKey\": \"%x\",\n    \"privKey\": \"%x\"\n}", pk, sk)
 	case "chain":
 		wallet.CmdChain(args.Chain.Height)
-	case "show":
-		wallet.CmdShow(args.Show.Verbose)
+	case "balance":
+		wallet.CmdBalance(args.Balance.Utxo)
 	case "transfer <value>":
 		wallet.CmdTransfer(args.Transfer.To, args.Transfer.Value, args.Transfer.Fee, args.Transfer.Nowait)
 	default:
