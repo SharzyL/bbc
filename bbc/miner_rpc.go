@@ -53,7 +53,7 @@ func (s *minerRpcHandler) PeekChain(ctx context.Context, req *pb.PeekChainReq) (
 			err = fmt.Errorf("cannot find block with hash %x when peekChain with depth %d", req.TopHash.Bytes, i)
 			return
 		}
-		if fullBlock.Header.Height <= 0 {
+		if fullBlock.Header.Height < 0 {
 			break
 		} else {
 			headers = append(headers, fullBlock.Header)
