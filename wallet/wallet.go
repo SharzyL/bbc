@@ -212,7 +212,7 @@ func (w *Wallet) CmdTransfer(toAddr string, value uint64, fee uint64, nowait boo
 	txOutList = append(txOutList, txOut)
 	if totalUtxoValue > value {
 		txOut2 := &pb.TxOut{
-			Value:          totalUtxoValue - value, // TODO: add miner fee
+			Value:          totalUtxoValue - inputValue, // TODO: add miner fee
 			ReceiverPubKey: &pb.PubKey{Bytes: w.PubKey},
 		}
 		txOutList = append(txOutList, txOut2)
@@ -262,7 +262,7 @@ func (w *Wallet) CmdTransfer(toAddr string, value uint64, fee uint64, nowait boo
 }
 
 type walletArgs struct {
-	Config string   `short:"f" default:"./wallet.json"`
+	Config string   `short:"f" default:"conf/wallet.json"`
 	Genkey struct{} `cmd:""`
 	Chain  struct {
 		Height int64 `short:"l" default:"-1"`
@@ -293,13 +293,16 @@ func main() {
 		log.Fatalf("failed to parse conf: %v", err)
 	}
 
+	if ctx.Command() == "genkey" {
+		pk, sk := bbc.GenKey()
+		fmt.Printf("{\n    \"pubKey\": \"%x\",\n    \"privKey\": \"%x\"\n}", pk, sk)
+		return
+	}
+
 	wallet := NewWallet(&conf)
 	defer wallet.Close()
 
 	switch ctx.Command() {
-	case "genkey":
-		pk, sk := bbc.GenKey()
-		fmt.Printf("{\n    \"pubKey\": \"%x\",\n    \"privKey\": \"%x\"\n}", pk, sk)
 	case "chain":
 		wallet.CmdChain(args.Chain.Height)
 	case "balance":

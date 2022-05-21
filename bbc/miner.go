@@ -141,6 +141,15 @@ func (l *Miner) serveLoop(memPoolFullChan chan<- struct{}) {
 }
 
 func (l *Miner) advertiseLoop(newBlockChan <-chan *fullBlockWithHash) {
+	// first advertise genesis block, to attract their own advertisement
+	l.peersMtx.RLock()
+	l.chainMtx.RLock()
+	for addr, _ := range l.Peers {
+		go l.sendAdvertisement(l.mainChain[0].Block.Header, addr)
+	}
+	l.chainMtx.RUnlock()
+	l.peersMtx.RUnlock()
+
 	for {
 		var blockToAdvertise *fullBlockWithHash
 		select {
@@ -152,45 +161,43 @@ func (l *Miner) advertiseLoop(newBlockChan <-chan *fullBlockWithHash) {
 		}
 
 		// advertise new block to peers
-		wg := sync.WaitGroup{}
-		wg.Add(len(l.Peers))
 		l.peersMtx.RLock()
 		for addr, _ := range l.Peers {
-			go func(addr string) {
-				defer wg.Done()
-				if addr == l.SelfAddr {
-					return
-				}
-
-				ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
-				defer cancel()
-				conn, err := grpc.DialContext(ctx, addr, grpc.WithInsecure(), grpc.WithBlock())
-				if err != nil {
-					l.logger.Warnw("failed to dial peer", zap.Error(err))
-					return
-				}
-				defer conn.Close()
-
-				client := pb.NewMinerClient(conn)
-
-				ctx, cancel = context.WithTimeout(context.Background(), rpcTimeout)
-				defer cancel()
-				l.logger.Debugw("advertise block to peer",
-					zap.Int64("height", blockToAdvertise.Block.Header.Height),
-					zap.String("hash", b2str(blockToAdvertise.Hash)),
-					zap.String("peer", addr))
-				_, err = client.AdvertiseBlock(ctx, &pb.AdvertiseBlockReq{
-					Header: blockToAdvertise.Block.Header,
-					Addr:   l.SelfAddr,
-				})
-				if err != nil {
-					l.logger.Errorw("fail to advertise block to peer", zap.Error(err))
-					return
-				}
-			}(addr)
+			go l.sendAdvertisement(blockToAdvertise.Block.Header, addr)
 		}
 		l.peersMtx.RUnlock()
-		wg.Wait()
+	}
+}
+
+func (l *Miner) sendAdvertisement(header *pb.BlockHeader, addr string) {
+	if addr == l.SelfAddr {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
+	defer cancel()
+	conn, err := grpc.DialContext(ctx, addr, grpc.WithInsecure(), grpc.WithBlock())
+	if err != nil {
+		l.logger.Warnw("failed to dial peer", zap.String("peerAddr", addr), zap.Error(err))
+		return
+	}
+	defer conn.Close()
+
+	client := pb.NewMinerClient(conn)
+
+	ctx, cancel = context.WithTimeout(context.Background(), rpcTimeout)
+	defer cancel()
+	l.logger.Debugw("advertise block to peer",
+		zap.Int64("height", header.Height),
+		zap.String("hash", b2str(Hash(header))),
+		zap.String("peer", addr))
+	_, err = client.AdvertiseBlock(ctx, &pb.AdvertiseBlockReq{
+		Header: header,
+		Addr:   l.SelfAddr,
+	})
+	if err != nil {
+		l.logger.Errorw("fail to advertise block to peer", zap.Error(err))
+		return
 	}
 }
 
@@ -313,6 +320,14 @@ findMaxSynced:
 			}
 		}
 	}()
+
+	// in case that another sync thread has already completed the syncing
+	if bytes.Equal(l.mainChain[len(l.mainChain)-1].Hash, newBlocks[len(newBlocks)-1].Hash) {
+		l.logger.Infow("no need to sync actually")
+		success = true
+		return
+	}
+
 	l.mainChain = l.mainChain[:minUnsynced]
 	for _, b := range newBlocks {
 		l.logger.Infow("trying to append synced block to chain", zap.Int64("height", b.Block.Header.Height))

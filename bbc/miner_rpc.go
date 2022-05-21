@@ -84,6 +84,7 @@ func (s *minerRpcHandler) AdvertiseBlock(ctx context.Context, req *pb.AdvertiseB
 	l.chainMtx.RLock()
 	mainChainHeight := int64(len(l.mainChain)) - 1
 	topBlockHash := l.mainChain[mainChainHeight].Hash
+	topHeader := l.mainChain[mainChainHeight].Block.Header
 	l.chainMtx.RUnlock()
 
 	l.logger.Debugw("receive AdvertiseBlock request",
@@ -103,9 +104,11 @@ func (s *minerRpcHandler) AdvertiseBlock(ctx context.Context, req *pb.AdvertiseB
 		go l.syncBlock(req.Addr, header)
 	} else if header.Height == mainChainHeight {
 		// check prf(padding, header) == 0 to determine whether to sync the block
-		if !bytes.Equal(topBlockHash, Hash(header)) && Hash(BytesWrapper{l.prfPadding}, header)[0]%2 == 0 {
+		if header.Height > 0 && !bytes.Equal(topBlockHash, Hash(header)) && Hash(BytesWrapper{l.prfPadding}, header)[0]%2 == 0 {
 			go l.syncBlock(req.Addr, header)
 		}
+	} else {
+		go l.sendAdvertisement(topHeader, req.Addr)
 	}
 	return &pb.AdvertiseBlockAns{}, nil
 }
