@@ -254,14 +254,14 @@ findMaxSynced:
 		cancel()
 
 		if err != nil {
-			l.logger.Errorw("fail peekChainReq", zap.Error(err))
+			l.logger.Errorw("failed to PeekChain", zap.Error(err))
 			return
 		} else if len(ans.Headers) == 0 {
 			l.logger.Errorw("unexpected empty peek result")
 			return
 		}
 
-		l.logger.Debugw("peekChainReq responds", zap.String("addr", addr),
+		l.logger.Debugw("PeekChainReq responds", zap.String("addr", addr),
 			zap.Int("numHeaders", len(ans.Headers)))
 		headersPending = ans.Headers
 	}
@@ -279,6 +279,12 @@ findMaxSynced:
 					zap.String("addr", addr),
 					zap.String("hash", b2str(hash)))
 				return
+			}
+			recvBlockHash := Hash(fullBlock.Header)
+			if !bytes.Equal(recvBlockHash, hash) {
+				l.logger.Errorw("receive block hash not match",
+					zap.String("expect", b2str(hash)),
+					zap.String("actual", b2str(recvBlockHash)))
 			}
 		}
 		newBlocks = append(newBlocks, makeFullBlockWithHash(fullBlock))
@@ -317,7 +323,9 @@ findMaxSynced:
 	}
 	success = true
 	l.logger.Infow("success to sync block from peer",
-		zap.String("peerAddr", addr), zap.Int("height", len(l.mainChain)), zap.Int64("fromHeight", minUnsynced))
+		zap.String("peerAddr", addr),
+		zap.Int("height", len(l.mainChain)),
+		zap.Int64("fromHeight", minUnsynced))
 	//----------------------
 	// chain unlocked
 	//----------------------
@@ -367,6 +375,7 @@ func (l *Miner) createBlock() *fullBlockWithHash {
 		}
 	}
 	txList[0].TxOutList[0].Value = memPoolTotalFee + MinerReward
+	difficulty := l.getDifficulty(l.mainChain, int64(len(l.mainChain))-1)
 	l.memPoolMtx.RUnlock()
 	l.chainMtx.RUnlock()
 	//-----------------------------
@@ -411,6 +420,7 @@ func (l *Miner) createBlock() *fullBlockWithHash {
 			MerkleRoot:  &pb.HashVal{Bytes: merkleRootHash},
 			Timestamp:   timestamp,
 			Height:      prevBlock.Block.Header.Height + 1,
+			Difficulty:  difficulty,
 			BlockNounce: make([]byte, NounceLen),
 		},
 		TxList:     txList,
@@ -421,13 +431,14 @@ func (l *Miner) createBlock() *fullBlockWithHash {
 		zap.String("merkleRoot", b2str(merkleRootHash)),
 		zap.Int64("timestamp", timestamp),
 		zap.Int64("height", b.Header.Height),
+		zap.Uint64("difficulty", b.Header.Difficulty),
 		zap.Int("numTx", len(b.TxList)),
 		zap.Uint64("numValidTx", n),
 	)
 
 	// start mining, takes a long time!
 	startMineTime := time.Now()
-	suc := Mine(b.Header, l.miningInterrupt, miningDifficulty)
+	suc := Mine(b.Header, l.miningInterrupt, int(difficulty))
 	miningTime := time.Now().Sub(startMineTime).Seconds()
 	if !suc {
 		l.logger.Infow("mining interrupted", zap.Float64("usedTime", miningTime))
@@ -463,9 +474,10 @@ func (l *Miner) createBlock() *fullBlockWithHash {
 		//-----------------------
 
 		l.logger.Infow("new mined block added to main chain",
+			zap.String("hash", b2str(fb.Hash)),
 			zap.String("nounce", b2str(b.Header.BlockNounce)),
 			zap.Int64("height", fb.Block.Header.Height),
-			zap.String("hash", b2str(fb.Hash)))
+		)
 		return fb
 	} else {
 		l.logger.Infow("mined block is superceded",
@@ -477,6 +489,24 @@ func (l *Miner) createBlock() *fullBlockWithHash {
 	//-----------------------
 	// chain unlocked
 	//-----------------------
+}
+
+func (l *Miner) getDifficulty(chain []*fullBlockWithHash, height int64) uint64 {
+	// the difficulty is set that according to the difficulty of the last k blocks,
+	// the next block should be mined out every [exp, 2 * exp) second
+	// TODO: add timestamp check when creating new block
+	if height <= 2 {
+		return defaultMiningDifficulty
+	}
+	k := minInt64(height-1, miningDifficultyBlocks) // starting from block 1
+
+	totalHashNum := uint64(0)
+	for i := height - k; i < height; i++ {
+		totalHashNum += 1 << chain[i].Block.Header.Difficulty
+	}
+	timeGap := chain[height-1].Block.Header.Timestamp - chain[height-k].Block.Header.Timestamp
+	estimatedComputingPower := totalHashNum / uint64(timeGap) // unit hash/ms
+	return uint64(log2Floor(uint64(expectedMiningTime.Milliseconds()) * estimatedComputingPower))
 }
 
 func (l *Miner) verifyBlock(b *pb.FullBlock) error {
@@ -511,7 +541,11 @@ func (l *Miner) verifyBlock(b *pb.FullBlock) error {
 	}
 
 	// verify BlockNounce (crypto puzzle)
-	if !hasLeadingZeros(Hash(b.Header), miningDifficulty) {
+	expectedDifficulty := l.getDifficulty(l.mainChain, b.Header.Height-1)
+	if b.Header.Difficulty != expectedDifficulty {
+		return fmt.Errorf("wrong difficulty, expected %d, actual %d", expectedDifficulty, b.Header.Difficulty)
+	}
+	if !hasLeadingZeros(Hash(b.Header), defaultMiningDifficulty) {
 		return fmt.Errorf("verify nounce failed, header hash %x", Hash(b.Header))
 	}
 
@@ -580,6 +614,9 @@ func (l *Miner) isBlockOnChain(b *fullBlockWithHash) bool {
 func (l *Miner) verifyTx(t *pb.Tx) (minerFee uint64, err error) {
 	totalInput := uint64(0)
 	for i, txin := range t.TxInList {
+		if len(txin.Sig.Bytes) != SigLen {
+			return 0, fmt.Errorf("illegal signature length")
+		}
 		if prevTxW := l.findTxByHash(txin.PrevTx.Bytes); prevTxW == nil {
 			return 0, fmt.Errorf("cannot find tx of hash [%x]", txin.PrevTx.Bytes)
 		} else {

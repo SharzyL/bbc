@@ -61,6 +61,7 @@ func PrintBlockHeader(h *pb.BlockHeader, indent int) {
 	fmt.Printf("%sMerkleRoot: %x\n", indentStr, h.MerkleRoot.Bytes)
 	fmt.Printf("%sTimestamp:  %s\n", indentStr, time.UnixMilli(h.Timestamp).UTC())
 	fmt.Printf("%sHeight:     %d\n", indentStr, h.Height)
+	fmt.Printf("%sDifficulty: %d\n", indentStr, h.Difficulty)
 }
 
 func PrintTx(tx *pb.Tx, indent int) {

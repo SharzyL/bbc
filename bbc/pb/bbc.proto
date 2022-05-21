@@ -54,7 +54,10 @@ message BlockHeader {
   HashVal merkle_root = 2;
   int64 timestamp = 3;
   int64 height = 4;
-  bytes block_nounce = 5;
+  uint64 difficulty = 5;
+
+  // nounce should always to kept the last, to keep compatibility with miner
+  bytes block_nounce = 6;
 }
 
 message TxMerkleNode {

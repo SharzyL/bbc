@@ -30,7 +30,6 @@ func (s *minerRpcHandler) PeekChain(ctx context.Context, req *pb.PeekChainReq) (
 	l.logger.Debugw("receive PeekChain request",
 		zap.String("hash", reqHashStr),
 		zap.Int64("limit", req.GetLimit()))
-	headers := make([]*pb.BlockHeader, 0, 10)
 
 	l.chainMtx.RLock()
 	defer l.chainMtx.RUnlock()
@@ -46,19 +45,19 @@ func (s *minerRpcHandler) PeekChain(ctx context.Context, req *pb.PeekChainReq) (
 	if limit <= 0 {
 		limit = peekChainDefaultLimit
 	}
+	headers := make([]*pb.BlockHeader, 0, limit)
 
 	for i := int64(0); i < limit; i++ {
 		fullBlock := l.findBlockByHash(topHash)
 		if fullBlock == nil {
-			err = fmt.Errorf("cannot find block with hash %x when peekChain with depth %d", req.TopHash.Bytes, i)
+			err = fmt.Errorf("cannot find block with hash %x after PeekChain iterates %d blocks", topHash, i)
 			return
 		}
-		if fullBlock.Header.Height < 0 {
+		if fullBlock.Header.Height <= 0 { // stop finding ancester of genesis block
 			break
-		} else {
-			headers = append(headers, fullBlock.Header)
-			topHash = fullBlock.Header.PrevHash.Bytes
 		}
+		headers = append(headers, fullBlock.Header)
+		topHash = fullBlock.Header.PrevHash.Bytes
 	}
 
 	return &pb.PeekChainAns{Headers: headers}, nil
@@ -104,7 +103,7 @@ func (s *minerRpcHandler) AdvertiseBlock(ctx context.Context, req *pb.AdvertiseB
 	return &pb.AdvertiseBlockAns{}, nil
 }
 
-func (s *minerRpcHandler) GetFullBlock(ctx context.Context, req *pb.HashVal) (*pb.FullBlock, error) {
+func (s *minerRpcHandler) GetFullBlock(ctx context.Context, req *pb.HashVal) (ans *pb.FullBlock, err error) {
 	l := s.l
 	l.logger.Debugw("receive GetFullBlock request",
 		zap.String("hash", b2str(req.Bytes)))
@@ -144,6 +143,7 @@ func (s *minerRpcHandler) UploadTx(ctx context.Context, tx *pb.Tx) (*pb.UploadTx
 	if err != nil {
 		return nil, fmt.Errorf("fail to verify tx: %v", err)
 	}
+	// TODO: imporve efficiency for verifying if txIn is used by something else in the pool
 	for _, txIn := range tx.TxInList {
 		for _, memPoolTx := range l.memPool {
 			for _, txIn2 := range memPoolTx.Tx.TxInList {

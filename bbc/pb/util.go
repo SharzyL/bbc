@@ -65,6 +65,8 @@ func (x *BlockHeader) ToBytes() []byte {
 	buf.Write(intBuf[:])
 	binary.BigEndian.PutUint64(intBuf[:], uint64(x.Height))
 	buf.Write(intBuf[:])
+	binary.BigEndian.PutUint64(intBuf[:], uint64(x.Difficulty))
+	buf.Write(intBuf[:])
 	buf.Write(x.BlockNounce[:])
 	return buf.Bytes()
 }
