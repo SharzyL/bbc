@@ -18,8 +18,8 @@ import (
 
 // Miner should be not be initialized manually, use NewMiner instead
 type Miner struct {
-	SelfAddr     string // network addr of self
-	PeerAddrList []string
+	SelfAddr string // network addr of self
+	Peers    map[string]struct{}
 
 	minerPubKey  []byte
 	minerPrivKey []byte
@@ -37,6 +37,7 @@ type Miner struct {
 
 	memPoolMtx      *sync.RWMutex
 	chainMtx        *sync.RWMutex
+	peersMtx        *sync.RWMutex
 	miningInterrupt *atomic.Bool // used to interrupt mining when current mining may become unnecessary
 
 	logger *zap.SugaredLogger
@@ -54,10 +55,16 @@ func NewMiner(pubKey []byte, privKey []byte, selfAddr string, peerAddrList []str
 
 	memPoolMtx := &sync.RWMutex{}
 	chainMtx := &sync.RWMutex{}
+	peersMtx := &sync.RWMutex{}
+
+	peers := make(map[string]struct{})
+	for _, peerAddr := range peerAddrList {
+		peers[peerAddr] = struct{}{}
+	}
 
 	miner := Miner{
-		SelfAddr:     selfAddr,
-		PeerAddrList: peerAddrList,
+		SelfAddr: selfAddr,
+		Peers:    peers,
 
 		minerPubKey:  pubKey,
 		minerPrivKey: privKey,
@@ -73,6 +80,7 @@ func NewMiner(pubKey []byte, privKey []byte, selfAddr string, peerAddrList []str
 
 		memPoolMtx:      memPoolMtx,
 		chainMtx:        chainMtx,
+		peersMtx:        peersMtx,
 		miningInterrupt: atomic.NewBool(false),
 
 		logger: logger,
@@ -126,8 +134,7 @@ func (l *Miner) serveLoop(memPoolFullChan chan<- struct{}) {
 		memPoolFullChan: memPoolFullChan,
 	})
 	l.logger.Infow("starting mainloop",
-		zap.String("addr", l.SelfAddr),
-		zap.Strings("peerAddr", l.PeerAddrList))
+		zap.String("addr", l.SelfAddr))
 	if err := s.Serve(lis); err != nil {
 		l.logger.Fatalw("failed to serve %v", zap.Error(err))
 	}
@@ -146,9 +153,10 @@ func (l *Miner) advertiseLoop(newBlockChan <-chan *fullBlockWithHash) {
 
 		// advertise new block to peers
 		wg := sync.WaitGroup{}
-		wg.Add(len(l.PeerAddrList))
-		for i, addr := range l.PeerAddrList {
-			go func(i int, addr string) {
+		wg.Add(len(l.Peers))
+		l.peersMtx.RLock()
+		for addr, _ := range l.Peers {
+			go func(addr string) {
 				defer wg.Done()
 				if addr == l.SelfAddr {
 					return
@@ -179,8 +187,9 @@ func (l *Miner) advertiseLoop(newBlockChan <-chan *fullBlockWithHash) {
 					l.logger.Errorw("fail to advertise block to peer", zap.Error(err))
 					return
 				}
-			}(i, addr)
+			}(addr)
 		}
+		l.peersMtx.RUnlock()
 		wg.Wait()
 	}
 }
@@ -280,12 +289,6 @@ findMaxSynced:
 					zap.String("hash", b2str(hash)))
 				return
 			}
-			recvBlockHash := Hash(fullBlock.Header)
-			if !bytes.Equal(recvBlockHash, hash) {
-				l.logger.Errorw("receive block hash not match",
-					zap.String("expect", b2str(hash)),
-					zap.String("actual", b2str(recvBlockHash)))
-			}
 		}
 		newBlocks = append(newBlocks, makeFullBlockWithHash(fullBlock))
 	}
@@ -310,7 +313,9 @@ findMaxSynced:
 			}
 		}
 	}()
+	l.mainChain = l.mainChain[:minUnsynced]
 	for _, b := range newBlocks {
+		l.logger.Infow("trying to append synced block to chain", zap.Int64("height", b.Block.Header.Height))
 		err := l.verifyBlock(b.Block)
 		if err != nil {
 			l.logger.Errorw("failed to verify synced block", zap.Error(err))
@@ -514,6 +519,11 @@ func (l *Miner) verifyBlock(b *pb.FullBlock) error {
 	h := header.Height
 	prevHeader := l.mainChain[h-1].Block.Header
 	prevHash := l.mainChain[h-1].Hash
+
+	// verify height
+	if int(h) != len(l.mainChain) {
+		return fmt.Errorf("height of block incorrect, expected %d, actual %d", len(l.mainChain), h)
+	}
 
 	// verify timestamp
 	if header.Timestamp < prevHeader.Timestamp { // asssuption is that genesis block is very early

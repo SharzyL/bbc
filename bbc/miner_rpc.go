@@ -92,6 +92,13 @@ func (s *minerRpcHandler) AdvertiseBlock(ctx context.Context, req *pb.AdvertiseB
 		zap.Int64("selfH", mainChainHeight),
 		zap.String("hashH", b2str(Hash(header))))
 
+	if _, found := l.Peers[req.Addr]; !found {
+		l.peersMtx.Lock()
+		l.Peers[req.Addr] = struct{}{}
+		l.logger.Infow("new peer added", zap.String("peerAddr", req.Addr))
+		l.peersMtx.Unlock()
+	}
+
 	if header.Height > mainChainHeight {
 		go l.syncBlock(req.Addr, header)
 	} else if header.Height == mainChainHeight {
