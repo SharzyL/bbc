@@ -3,15 +3,17 @@ package main
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
-	"github.com/SharzyL/bbc/bbc"
-	"google.golang.org/grpc"
 	"log"
 	"os"
 	"time"
 
+	"github.com/alecthomas/kong"
+	"google.golang.org/grpc"
+
+	"github.com/SharzyL/bbc/bbc"
 	"github.com/SharzyL/bbc/bbc/pb"
-	"github.com/jessevdk/go-flags"
 )
 
 const rpcTimeout = 1 * time.Second
@@ -20,41 +22,77 @@ type Wallet struct {
 	PubKey  []byte
 	PrivKey []byte
 
+	Miner string
+	Addr  map[string][]byte
+
+	Conn   *grpc.ClientConn
+	Client pb.MinerClient
+
 	UtxoList []*pb.Utxo
 }
 
-var wallet *Wallet
-
-type BlockCmd struct {
-	Miner  string `short:"m" long:"miner" required:"true"`
-	Height int64  `short:"l" long:"height" default:"-1"`
+type WalletConfig struct {
+	PubKey  string            `json:"pubKey"`
+	PrivKey string            `json:"privKey"`
+	Miner   string            `json:"miner"`
+	Addr    map[string]string `json:"addr"`
 }
 
-func NewClient(minerAddr string) (*pb.MinerClient, *grpc.ClientConn) {
+func NewWallet(conf *WalletConfig) *Wallet {
+	pubKey, err := hex.DecodeString(conf.PubKey)
+	if err != nil {
+		log.Panicf("canont parse pubkey '%s': %v", conf.PubKey, err)
+	}
+	privKey, err := hex.DecodeString(conf.PrivKey)
+	if err != nil {
+		log.Panicf("canont parse privkey '%s': %v", conf.PrivKey, err)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
 	defer cancel()
-	conn, err := grpc.DialContext(ctx, minerAddr, grpc.WithInsecure(), grpc.WithBlock())
+	conn, err := grpc.DialContext(ctx, conf.Miner, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
-		log.Panicf("cannot dial %s: %v", minerAddr, err)
+		log.Panicf("cannot dial %s: %v", conf.Miner, err)
 	}
-	client := pb.NewMinerClient(conn)
-	return &client, conn
+
+	addr := make(map[string][]byte)
+	for name, pubKey := range conf.Addr {
+		binPubKey, _ := hex.DecodeString(pubKey)
+		addr[name] = binPubKey
+	}
+	return &Wallet{
+		PubKey:   pubKey,
+		PrivKey:  privKey,
+		Miner:    conf.Miner,
+		Addr:     addr,
+		Conn:     conn,
+		Client:   pb.NewMinerClient(conn),
+		UtxoList: []*pb.Utxo{},
+	}
 }
 
-//-------------------------
-// Block command
-//-------------------------
+func (w *Wallet) Close() {
+	if w.Conn != nil {
+		_ = w.Conn.Close()
+	}
+}
 
-func (w *Wallet) CmdBlock(x *BlockCmd) {
-	c, conn := NewClient(x.Miner)
-	client := *c
-	defer conn.Close()
+func (w *Wallet) GetUtxo() {
+	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
+	defer cancel()
+	lookupAns, err := w.Client.LookupUtxo(ctx, &pb.PubKey{Bytes: w.PubKey})
+	if err != nil {
+		log.Fatalf("cannot lookup utxo: %v", err)
+	}
+	w.UtxoList = lookupAns.UtxoList
+}
 
+func (w *Wallet) CmdChain(height int64) {
 	var hash *pb.HashVal
-	if x.Height < 0 {
+	if height < 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
 		defer cancel()
-		peekResp, err := client.PeekChain(ctx, &pb.PeekChainReq{TopHash: nil, Limit: nil})
+		peekResp, err := w.Client.PeekChain(ctx, &pb.PeekChainReq{TopHash: nil, Limit: nil})
 		if err != nil {
 			log.Fatalf("failed to PeekChain: %v", err)
 		}
@@ -65,7 +103,7 @@ func (w *Wallet) CmdBlock(x *BlockCmd) {
 	} else {
 		ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
 		defer cancel()
-		peekResp, err := client.PeekChainByHeight(ctx, &pb.PeekChainByHeightReq{Height: x.Height})
+		peekResp, err := w.Client.PeekChainByHeight(ctx, &pb.PeekChainByHeightReq{Height: height})
 		if err != nil {
 			log.Fatalf("failed to PeekChain: %v", err)
 		}
@@ -76,7 +114,7 @@ func (w *Wallet) CmdBlock(x *BlockCmd) {
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
-	block, err := client.GetFullBlock(ctx, hash)
+	block, err := w.Client.GetFullBlock(ctx, hash)
 	defer cancel()
 	if err != nil {
 		log.Fatalf("failed to GetFullBlock: %v", err)
@@ -84,37 +122,12 @@ func (w *Wallet) CmdBlock(x *BlockCmd) {
 	bbc.PrintBlock(block, 0)
 }
 
-func (x *BlockCmd) Execute(args []string) error {
-	wallet.CmdBlock(x)
-	return nil
-}
-
-//-------------------------
-// Show command
-//-------------------------
-
-type ShowCmd struct {
-	Miner   string `short:"m" long:"miner" required:"true"`
-	Verbose bool   `short:"v" long:"verbose"`
-}
-
-func (w *Wallet) CmdShow(x *ShowCmd) {
-	c, conn := NewClient(x.Miner)
-	client := *c
-	defer conn.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
-	defer cancel()
-	lookupAns, err := client.LookupUtxo(ctx, &pb.PubKey{Bytes: w.PubKey})
-	if err != nil {
-		log.Fatalf("cannot lookup utxo: %v", err)
-	}
-
+func (w *Wallet) CmdShow(verbose bool) {
+	w.GetUtxo()
 	fmt.Printf("pubkey: %x\n", w.PubKey)
-	w.UtxoList = lookupAns.UtxoList
 	balance := uint64(0)
 	for i, utxo := range w.UtxoList {
-		if x.Verbose {
+		if verbose {
 			fmt.Printf("Utxo %d:\n", i)
 			bbc.PrintUtxo(utxo, 2)
 		}
@@ -123,35 +136,16 @@ func (w *Wallet) CmdShow(x *ShowCmd) {
 	fmt.Printf("current balance: %d\n", balance)
 }
 
-func (x *ShowCmd) Execute(args []string) error {
-	wallet.CmdShow(x)
-	return nil
-}
-
-//-------------------------
-// Spend command
-//-------------------------
-
-type SpendCmd struct {
-	Miner  string `short:"m" long:"miner" required:"true"`
-	ToAddr string `short:"a" logn:"addr" required:"true"`
-	Value  uint64 `short:"v" logn:"amount" required:"true"`
-}
-
-func (w *Wallet) CmdSpend(x *SpendCmd) {
-	addr, _ := hex.DecodeString(x.ToAddr)
-
-	c, conn := NewClient(x.Miner)
-	client := *c
-	defer conn.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
-	defer cancel()
-	lookupAns, err := client.LookupUtxo(ctx, &pb.PubKey{Bytes: w.PubKey})
-	if err != nil {
-		log.Fatalf("cannot lookup utxo: %v", err)
+func (w *Wallet) CmdTransfer(toAddr string, value uint64, fee uint64, nowait bool) {
+	w.GetUtxo()
+	addr, found := w.Addr[toAddr]
+	if !found {
+		parsedAddr, err := hex.DecodeString(toAddr)
+		if err != nil {
+			log.Fatalf("cannot parse toAddr '%s': %v", toAddr, err)
+		}
+		addr = parsedAddr
 	}
-	w.UtxoList = lookupAns.UtxoList
 
 	var txInList []*pb.TxIn
 	var txOutList []*pb.TxOut
@@ -165,21 +159,21 @@ func (w *Wallet) CmdSpend(x *SpendCmd) {
 		}
 		txIn.Sig = pb.NewSigVal(bbc.Sign(txIn, w.PrivKey))
 		txInList = append(txInList, txIn)
-		if totalUtxoValue >= x.Value {
+		if totalUtxoValue >= value {
 			break
 		}
 	}
-	if totalUtxoValue < x.Value {
+	if totalUtxoValue < value {
 		log.Panicf("balance not enough")
 	}
 	txOut := &pb.TxOut{
-		Value:          x.Value,
+		Value:          value,
 		ReceiverPubKey: &pb.PubKey{Bytes: w.PubKey},
 	}
 	txOutList = append(txOutList, txOut)
-	if totalUtxoValue > x.Value {
+	if totalUtxoValue > value {
 		txOut2 := &pb.TxOut{
-			Value:          totalUtxoValue - x.Value, // TODO: add miner fee
+			Value:          totalUtxoValue - value, // TODO: add miner fee
 			ReceiverPubKey: &pb.PubKey{Bytes: addr},
 		}
 		txOutList = append(txOutList, txOut2)
@@ -191,63 +185,83 @@ func (w *Wallet) CmdSpend(x *SpendCmd) {
 		Timestamp: time.Now().UnixMilli(),
 	}
 
-	ctx, cancel = context.WithTimeout(context.Background(), rpcTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
 	defer cancel()
-	_, err = client.UploadTx(ctx, tx)
+	_, err := w.Client.UploadTx(ctx, tx)
 	if err != nil {
 		log.Panicf("failed to upload tx: %v", err)
 	}
+	log.Printf("successfully upload tx to miner (%s)", w.Miner)
 
-	txHash := bbc.Hash(tx)
-	for {
-		ctx, cancel = context.WithTimeout(context.Background(), rpcTimeout)
-		findTxAns, err := client.FindTx(ctx, pb.NewHashVal(txHash))
-		cancel()
-		if err != nil {
-			log.Panicf("failed to findTX: %v", err)
-		}
+	if !nowait {
+		log.Printf("waiting for the tx to appear on the chain")
+		txHash := bbc.Hash(tx)
+		for {
+			ctx, cancel = context.WithTimeout(context.Background(), rpcTimeout)
+			findTxAns, err := w.Client.FindTx(ctx, pb.NewHashVal(txHash))
+			cancel()
+			if err != nil {
+				log.Panicf("failed to findTX: %v", err)
+			}
 
-		if findTxAns.BlockHeader != nil {
-			bbc.PrintBlockHeader(findTxAns.BlockHeader, 0)
-			return
+			if findTxAns.BlockHeader != nil {
+				bbc.PrintBlockHeader(findTxAns.BlockHeader, 0)
+				return
+			}
+			time.Sleep(time.Second)
 		}
-		time.Sleep(time.Second)
 	}
 }
 
-func (x *SpendCmd) Execute(args []string) error {
-	wallet.CmdSpend(x)
-	return nil
-}
-
-type GlobalOpts struct {
-	PrivKey string `long:"sk" required:"true"`
-	PubKey  string `long:"pk" required:"true"`
+type walletArgs struct {
+	Config string   `short:"f" default:"./wallet.json"`
+	Genkey struct{} `cmd:""`
+	Chain  struct {
+		Height int64 `short:"l" default:"-1"`
+	} `cmd:""`
+	Show struct {
+		Verbose bool `short:"v"`
+	} `cmd:""`
+	Transfer struct {
+		To     string `short:"t" required:"true"`
+		Nowait bool
+		Fee    uint64 `default:"0"`
+		Value  uint64 `arg:""`
+	} `cmd:""`
 }
 
 func main() {
-	pubKey, _ := hex.DecodeString("e67af31affc28963b331eca5409e7d33b1c1d4b35aeb5b4db0c2be320095f81c")
-	privKey, _ := hex.DecodeString("552d9e1e0250d975ff4b6129a5d1bf3f7dec9e85b20862af3eed4a1ffc542bd6e67af31affc28963b331eca5409e7d33b1c1d4b35aeb5b4db0c2be320095f81c")
-	wallet = &Wallet{
-		PubKey:   pubKey,
-		PrivKey:  privKey,
-		UtxoList: []*pb.Utxo{},
-	}
-	var blockCommand BlockCmd
-	var ShowCommand ShowCmd
-	var spendCommand SpendCmd
+	var args walletArgs
+	ctx := kong.Parse(&args)
 
-	parser := flags.NewNamedParser("viewer", flags.Default)
-	_, _ = parser.AddCommand("block", "view block", "view block", &blockCommand)
-	_, _ = parser.AddCommand("show", "show account", "show account", &ShowCommand)
-	_, _ = parser.AddCommand("spend", "spend money", "spend money", &spendCommand)
-
-	_, err := parser.Parse()
+	confBytes, err := os.ReadFile(args.Config)
 	if err != nil {
-		if flags.WroteHelp(err) {
-			return
-		} else {
-			os.Exit(1)
-		}
+		log.Fatalf("failed to open config: %v", err)
+	}
+
+	var conf WalletConfig
+	err = json.Unmarshal(confBytes, &conf)
+	if err != nil {
+		log.Fatalf("failed to parse conf: %v", err)
+	}
+
+	switch ctx.Command() {
+	case "genkey":
+		pk, sk := bbc.GenKey()
+		fmt.Printf("{\n    \"pubKey\": \"%x\",\n    \"privKey\": \"%x\"\n}", pk, sk)
+	case "chain":
+		wallet := NewWallet(&conf)
+		defer wallet.Close()
+		wallet.CmdChain(args.Chain.Height)
+	case "show":
+		wallet := NewWallet(&conf)
+		defer wallet.Close()
+		wallet.CmdShow(args.Show.Verbose)
+	case "transfer <value>":
+		wallet := NewWallet(&conf)
+		defer wallet.Close()
+		wallet.CmdTransfer(args.Transfer.To, args.Transfer.Value, args.Transfer.Fee, args.Transfer.Nowait)
+	default:
+		log.Panicf("unknown command '%s'", ctx.Command())
 	}
 }

@@ -2,27 +2,43 @@ package main
 
 import (
 	"encoding/hex"
-	"github.com/SharzyL/bbc/bbc"
-	"github.com/jessevdk/go-flags"
+	"encoding/json"
+	"github.com/alecthomas/kong"
+	"log"
 	"os"
+
+	"github.com/SharzyL/bbc/bbc"
 )
 
 func main() {
 	var opts struct {
-		SelfAddr  string   `short:"a" long:"addr" required:"true"`
-		PeersAddr []string `short:"p" long:"peer"`
+		Key  string   `short:"k" required:"true"`
+		Addr string   `short:"a" required:"true"`
+		Peer []string `short:"p"`
 	}
-	_, err := flags.Parse(&opts)
-	if err != nil {
-		if flags.WroteHelp(err) {
-			return
-		} else {
-			os.Exit(1)
-		}
+	var keys struct {
+		PubKey  string `json:"pubKey"`
+		PrivKey string `json:"privKey"`
 	}
-	pubKey, _ := hex.DecodeString("e67af31affc28963b331eca5409e7d33b1c1d4b35aeb5b4db0c2be320095f81c")
-	privKey, _ := hex.DecodeString("552d9e1e0250d975ff4b6129a5d1bf3f7dec9e85b20862af3eed4a1ffc542bd6e67af31affc28963b331eca5409e7d33b1c1d4b35aeb5b4db0c2be320095f81c")
 
-	miner := bbc.NewMiner(pubKey, privKey, opts.SelfAddr, opts.PeersAddr)
+	_ = kong.Parse(&opts)
+	keyBytes, err := os.ReadFile(opts.Key)
+	if err != nil {
+		log.Panicf("cannot open key file: %v", err)
+	}
+	err = json.Unmarshal(keyBytes, &keys)
+	if err != nil {
+		log.Panicf("cannot parse key file: %v", err)
+	}
+
+	pubKey, err := hex.DecodeString(keys.PubKey)
+	if err != nil {
+		log.Panicf("canont parse pubkey '%s': %v", keys.PubKey, err)
+	}
+	privKey, err := hex.DecodeString(keys.PrivKey)
+	if err != nil {
+		log.Panicf("canont parse privkey '%s': %v", keys.PrivKey, err)
+	}
+	miner := bbc.NewMiner(pubKey, privKey, opts.Addr, opts.Peer)
 	miner.MainLoop()
 }

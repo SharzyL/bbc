@@ -88,6 +88,7 @@ func (s *minerRpcHandler) AdvertiseBlock(ctx context.Context, req *pb.AdvertiseB
 	l.chainMtx.RUnlock()
 
 	l.logger.Debugw("receive AdvertiseBlock request",
+		zap.String("addr", req.Addr),
 		zap.Int64("h", header.Height),
 		zap.Int64("selfH", mainChainHeight),
 		zap.String("hashH", b2str(Hash(header))))

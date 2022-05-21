@@ -45,6 +45,13 @@ type Miner struct {
 func NewMiner(pubKey []byte, privKey []byte, selfAddr string, peerAddrList []string) *Miner {
 	logger := GetLogger()
 
+	if len(pubKey) != PubKeyLen {
+		logger.Fatalw("incorrect pubKey length", zap.Int("expect", PubKeyLen), zap.Int("actual", len(pubKey)))
+	}
+	if len(privKey) != PrivKeyLen {
+		logger.Fatalw("incorrect privKey length", zap.Int("expect", PrivKeyLen), zap.Int("actual", len(privKey)))
+	}
+
 	memPoolMtx := &sync.RWMutex{}
 	chainMtx := &sync.RWMutex{}
 
@@ -71,6 +78,8 @@ func NewMiner(pubKey []byte, privKey []byte, selfAddr string, peerAddrList []str
 		logger: logger,
 	}
 	miner.rpcHandler.l = &miner
+
+	logger.Infow("add miner pubkey", zap.String("hash", b2str(pubKey)))
 
 	genesisBlock := makeFullBlockWithHash(GenesisBlock())
 	miner.hashToBlock.Insert(genesisBlock.Hash, genesisBlock.Block)
@@ -266,6 +275,7 @@ findMaxSynced:
 			fullBlock, err = client.GetFullBlock(ctx, pb.NewHashVal(hash))
 			if err != nil {
 				l.logger.Errorw("fail to get full block",
+					zap.Error(err),
 					zap.String("addr", addr),
 					zap.String("hash", b2str(hash)))
 				return

@@ -70,7 +70,7 @@ func maxInt(a, b int) int {
 
 func b2str(b []byte) string {
 	if b != nil {
-		return fmt.Sprintf("%x", b)[:16]
+		return fmt.Sprintf("%x", b)
 	} else {
 		return "<nil>"
 	}

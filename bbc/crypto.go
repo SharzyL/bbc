@@ -15,7 +15,7 @@ const HashLen = sha256.Size               // 64
 const PubKeyLen = ed25519.PublicKeySize   // 32
 const PrivKeyLen = ed25519.PrivateKeySize // 64
 const SigLen = ed25519.SignatureSize      // 64
-const NounceLen = 64
+const NounceLen = 32
 
 const MinerReward = uint64(10000)
 
