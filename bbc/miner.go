@@ -154,7 +154,7 @@ func (l *Miner) advertiseLoop(newBlockChan <-chan *fullBlockWithHash) {
 					return
 				}
 
-				ctx, cancel := context.WithTimeout(context.Background(), DefaultRpcTimeout)
+				ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
 				defer cancel()
 				conn, err := grpc.DialContext(ctx, addr, grpc.WithInsecure(), grpc.WithBlock())
 				if err != nil {
@@ -165,7 +165,7 @@ func (l *Miner) advertiseLoop(newBlockChan <-chan *fullBlockWithHash) {
 
 				client := pb.NewMinerClient(conn)
 
-				ctx, cancel = context.WithTimeout(context.Background(), DefaultRpcTimeout)
+				ctx, cancel = context.WithTimeout(context.Background(), rpcTimeout)
 				defer cancel()
 				l.logger.Debugw("advertise block to peer",
 					zap.Int64("height", blockToAdvertise.Block.Header.Height),
@@ -206,7 +206,7 @@ func (l *Miner) findBlockByHash(hash []byte) *pb.FullBlock {
 func (l *Miner) syncBlock(addr string, topHeader *pb.BlockHeader) {
 	// prerequisite: topHeader.length >= mainCHain.length, topHeader.top != mainChain.top
 
-	ctx, cancel := context.WithTimeout(context.Background(), DefaultRpcTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
 	defer cancel()
 	conn, err := grpc.DialContext(ctx, addr, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
@@ -249,7 +249,7 @@ findMaxSynced:
 		prevHash := headersPending[len(headersPending)-1].PrevHash.Bytes
 		l.logger.Debugw("send peekChainReq", zap.String("addr", addr), zap.String("hash", b2str(prevHash)))
 
-		ctx, cancel := context.WithTimeout(context.Background(), DefaultRpcTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
 		ans, err := client.PeekChain(ctx, &pb.PeekChainReq{TopHash: pb.NewHashVal(prevHash)})
 		cancel()
 

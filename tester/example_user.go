@@ -11,9 +11,10 @@ import (
 	"github.com/jessevdk/go-flags"
 	"google.golang.org/grpc"
 
-	"github.com/SharzyL/bbc/bbc"
 	"github.com/SharzyL/bbc/bbc/pb"
 )
+
+const rpcTimeout = 1 * time.Second
 
 func main() {
 	var opts struct {
@@ -51,7 +52,7 @@ func main() {
 			log.Printf("start %d", i)
 			grStartTime := time.Now()
 			defer wg.Done()
-			ctx, cancel := context.WithTimeout(context.Background(), bbc.DefaultRpcTimeout)
+			ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
 			defer cancel()
 			conn, err := grpc.DialContext(ctx, opts.Miner, grpc.WithInsecure(), grpc.WithBlock())
 			if err != nil {
@@ -62,7 +63,7 @@ func main() {
 
 			client := pb.NewMinerClient(conn)
 
-			ctx, cancel = context.WithTimeout(context.Background(), bbc.DefaultRpcTimeout)
+			ctx, cancel = context.WithTimeout(context.Background(), rpcTimeout)
 			defer cancel()
 
 			_, err = client.UploadTx(ctx, tx)
