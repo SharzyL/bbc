@@ -439,13 +439,13 @@ func (l *Miner) createBlock() *fullBlockWithHash {
 	// start mining, takes a long time!
 	startMineTime := time.Now()
 	suc := Mine(b.Header, l.miningInterrupt, int(difficulty))
-	miningTime := time.Now().Sub(startMineTime).Seconds()
+	miningTime := time.Now().Sub(startMineTime)
 	if !suc {
-		l.logger.Infow("mining interrupted", zap.Float64("usedTime", miningTime))
+		l.logger.Infow("mining interrupted", zap.Duration("usedTime", miningTime))
 		return nil
 	} else {
 		l.logger.Infow("mined a new block",
-			zap.Float64("usedTime", miningTime),
+			zap.Duration("usedTime", miningTime),
 			zap.String("nounce", b2str(b.Header.BlockNounce)),
 		)
 	}
