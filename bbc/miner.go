@@ -196,7 +196,7 @@ func (l *Miner) sendAdvertisement(header *pb.BlockHeader, addr string) {
 		Addr:   l.SelfAddr,
 	})
 	if err != nil {
-		l.logger.Errorw("fail to advertise block to peer", zap.Error(err))
+		l.logger.Errorw("fail to advertise block to peer", zap.Error(err), zap.String("peerAddr", addr))
 		return
 	}
 }
@@ -226,7 +226,7 @@ func (l *Miner) syncBlock(addr string, topHeader *pb.BlockHeader) {
 	defer cancel()
 	conn, err := grpc.DialContext(ctx, addr, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
-		l.logger.Errorw("fail to dial when syncing block", zap.Error(err))
+		l.logger.Errorw("fail to dial when syncing block", zap.Error(err), zap.String("peerAddr", addr))
 		return
 	}
 	defer conn.Close()
@@ -292,7 +292,7 @@ findMaxSynced:
 			if err != nil {
 				l.logger.Errorw("fail to get full block",
 					zap.Error(err),
-					zap.String("addr", addr),
+					zap.String("peerAddr", addr),
 					zap.String("hash", b2str(hash)))
 				return
 			}
