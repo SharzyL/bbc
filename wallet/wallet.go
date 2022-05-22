@@ -226,8 +226,8 @@ func (w *Wallet) CmdTransfer(toAddr string, value uint64, fee uint64, nowait boo
 
 	wg := sync.WaitGroup{}
 	wg.Add(len(w.Clients))
-	for _, client := range w.Clients {
-		go func(client pb.MinerClient) {
+	for i, client := range w.Clients {
+		go func(i int, client pb.MinerClient) {
 			defer wg.Done()
 			ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
 			_, err := client.UploadTx(ctx, tx)
@@ -235,8 +235,8 @@ func (w *Wallet) CmdTransfer(toAddr string, value uint64, fee uint64, nowait boo
 			if err != nil {
 				log.Panicf("failed to upload tx: %v", err)
 			}
-			log.Printf("successfully upload tx to miner (%s)", w.Miners[0])
-		}(client)
+			log.Printf("successfully upload tx to miner (%s)", w.Miners[i])
+		}(i, client)
 	}
 	wg.Wait()
 
