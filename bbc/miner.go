@@ -239,6 +239,12 @@ func (l *Miner) syncBlock(addr string, topHeader *pb.BlockHeader) {
 	originalChain := l.mainChain
 	l.chainMtx.RUnlock()
 
+	// in case that another sync thread has already completed the syncing
+	if bytes.Equal(l.mainChain[len(l.mainChain)-1].Hash, Hash(topHeader)) {
+		l.logger.Infow("no need to sync actually")
+		return
+	}
+
 	headersPending := []*pb.BlockHeader{topHeader} // a list of headers, will later be checked
 	height := topHeader.Height                     // expected height of the last checked header
 
@@ -246,13 +252,13 @@ findMaxSynced:
 	for {
 		for _, header := range headersPending {
 			if header.Height != height {
-				l.logger.Errorw("unexpected height", zap.Int64("exp", height),
-					zap.Int64("act", header.Height))
+				l.logger.Errorw("unexpected height", zap.Int64("expected", height),
+					zap.Int64("actual", header.Height))
 				return
-			} else if header.Height < int64(len(originalChain)) && bytes.Equal(Hash(header), originalChain[height].Hash) {
+			} else if header.Height <= int64(len(originalChain))-1 && bytes.Equal(Hash(header), originalChain[height].Hash) {
 				// already on the chain, no need to sync
 				break findMaxSynced
-			} else {
+			} else if header.Height > 0 {
 				hashesToSync = append(hashesToSync, Hash(header))
 				height--
 			}
@@ -290,7 +296,7 @@ findMaxSynced:
 		if fullBlock == nil {
 			fullBlock, err = client.GetFullBlock(ctx, pb.NewHashVal(hash))
 			if err != nil {
-				l.logger.Errorw("fail to get full block",
+				l.logger.Errorw("fail to GetFullBlock when syncing",
 					zap.Error(err),
 					zap.String("peerAddr", addr),
 					zap.String("hash", b2str(hash)))
@@ -330,7 +336,9 @@ findMaxSynced:
 
 	l.mainChain = l.mainChain[:minUnsynced]
 	for _, b := range newBlocks {
-		l.logger.Infow("trying to append synced block to chain", zap.Int64("height", b.Block.Header.Height))
+		l.logger.Infow("trying to append synced block to chain",
+			zap.String("hash", b2str(b.Hash)),
+			zap.Int64("height", b.Block.Header.Height))
 		err := l.verifyBlock(b.Block)
 		if err != nil {
 			l.logger.Errorw("failed to verify synced block", zap.Error(err))
@@ -589,8 +597,8 @@ func (l *Miner) verifyBlock(b *pb.FullBlock) error {
 	if b.Header.Difficulty != expectedDifficulty {
 		return fmt.Errorf("wrong difficulty, expected %d, actual %d", expectedDifficulty, b.Header.Difficulty)
 	}
-	if !hasLeadingZeros(Hash(b.Header), defaultMiningDifficulty) {
-		return fmt.Errorf("verify nounce failed, header hash %x", Hash(b.Header))
+	if !hasLeadingZeros(Hash(b.Header), int(expectedDifficulty)) {
+		return fmt.Errorf("verify nounce failed, header hash %x (difficulty %d)", Hash(b.Header), expectedDifficulty)
 	}
 
 	// verify transaction
