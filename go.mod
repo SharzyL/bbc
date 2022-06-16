@@ -3,13 +3,13 @@ module github.com/SharzyL/bbc
 go 1.18
 
 require (
+	github.com/alecthomas/kong v0.5.0
 	github.com/jessevdk/go-flags v1.5.0
 	github.com/schollz/progressbar/v3 v3.8.6
 	go.uber.org/atomic v1.7.0
 	go.uber.org/zap v1.21.0
 	google.golang.org/grpc v1.36.0
 	google.golang.org/protobuf v1.25.0
-	github.com/alecthomas/kong v0.5.0
 )
 
 require (

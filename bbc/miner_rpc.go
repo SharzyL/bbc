@@ -18,8 +18,6 @@ type minerRpcHandler struct {
 	memPoolFullChan chan<- struct{}
 }
 
-// TODO: check input array length when receiving requests
-
 func (s *minerRpcHandler) PeekChain(ctx context.Context, req *pb.PeekChainReq) (ans *pb.PeekChainAns, err error) {
 	l := s.l
 
@@ -83,7 +81,6 @@ func (s *minerRpcHandler) AdvertiseBlock(ctx context.Context, req *pb.AdvertiseB
 	header := req.Header
 	l.chainMtx.RLock()
 	mainChainHeight := int64(len(l.mainChain)) - 1
-	topBlockHash := l.mainChain[mainChainHeight].Hash
 	topHeader := l.mainChain[mainChainHeight].Block.Header
 	l.chainMtx.RUnlock()
 
@@ -93,24 +90,14 @@ func (s *minerRpcHandler) AdvertiseBlock(ctx context.Context, req *pb.AdvertiseB
 		zap.Int64("selfH", mainChainHeight),
 		zap.String("hashH", b2str(Hash(header))))
 
-	if _, found := l.Peers[req.Addr]; !found {
-		l.peersMtx.Lock()
-		l.Peers[req.Addr] = struct{}{}
-		l.logger.Infow("new peer added", zap.String("peerAddr", req.Addr))
-		l.peersMtx.Unlock()
-	}
+	l.peerMgr.onRecvAdvertise(req.Addr, header)
 
 	if header.Height > mainChainHeight {
 		go l.syncBlock(req.Addr, header)
-	} else if header.Height == mainChainHeight {
-		// check prf(padding, header) == 0 to determine whether to sync the block
-		if header.Height > 0 && !bytes.Equal(topBlockHash, Hash(header)) && Hash(BytesWrapper{l.prfPadding}, header)[0]%2 == 0 {
-			go l.syncBlock(req.Addr, header)
-		}
-	} else {
+	} else if header.Height < mainChainHeight {
 		go l.sendAdvertisement(topHeader, req.Addr)
 	}
-	return &pb.AdvertiseBlockAns{}, nil
+	return &pb.AdvertiseBlockAns{Header: topHeader}, nil
 }
 
 func (s *minerRpcHandler) GetFullBlock(ctx context.Context, req *pb.HashVal) (ans *pb.FullBlock, err error) {

@@ -95,7 +95,7 @@ message AdvertiseBlockReq {
 }
 
 message AdvertiseBlockAns {
-
+  BlockHeader header = 1;
 }
 
 //--------------------

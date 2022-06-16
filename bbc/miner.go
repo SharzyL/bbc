@@ -19,7 +19,6 @@ import (
 // Miner should be not be initialized manually, use NewMiner instead
 type Miner struct {
 	SelfAddr string // network addr of self
-	Peers    map[string]struct{}
 
 	minerPubKey  []byte
 	minerPrivKey []byte
@@ -35,9 +34,10 @@ type Miner struct {
 	rpcHandler  minerRpcHandler
 	peerClients []*pb.MinerClient
 
+	peerMgr *peerMgr
+
 	memPoolMtx      *sync.RWMutex
 	chainMtx        *sync.RWMutex
-	peersMtx        *sync.RWMutex
 	miningInterrupt *atomic.Bool // used to interrupt mining when current mining may become unnecessary
 
 	logger *zap.SugaredLogger
@@ -55,16 +55,9 @@ func NewMiner(pubKey []byte, privKey []byte, selfAddr string, peerAddrList []str
 
 	memPoolMtx := &sync.RWMutex{}
 	chainMtx := &sync.RWMutex{}
-	peersMtx := &sync.RWMutex{}
-
-	peers := make(map[string]struct{})
-	for _, peerAddr := range peerAddrList {
-		peers[peerAddr] = struct{}{}
-	}
 
 	miner := Miner{
 		SelfAddr: selfAddr,
-		Peers:    peers,
 
 		minerPubKey:  pubKey,
 		minerPrivKey: privKey,
@@ -78,14 +71,19 @@ func NewMiner(pubKey []byte, privKey []byte, selfAddr string, peerAddrList []str
 
 		rpcHandler: minerRpcHandler{}, // init self pointer later
 
+		peerMgr: newPeerMgr(logger),
+
 		memPoolMtx:      memPoolMtx,
 		chainMtx:        chainMtx,
-		peersMtx:        peersMtx,
 		miningInterrupt: atomic.NewBool(false),
 
 		logger: logger,
 	}
 	miner.rpcHandler.l = &miner
+
+	for _, peerAddr := range peerAddrList {
+		miner.peerMgr.addPeer(peerAddr)
+	}
 
 	logger.Infow("add miner pubkey", zap.String("hash", b2str(pubKey)))
 
@@ -98,11 +96,10 @@ func NewMiner(pubKey []byte, privKey []byte, selfAddr string, peerAddrList []str
 }
 
 func (l *Miner) MainLoop() {
-	newBlockChan := make(chan *fullBlockWithHash, 3)
 	memPoolFullChan := make(chan struct{})
 
 	go l.serveLoop(memPoolFullChan)
-	go l.advertiseLoop(newBlockChan)
+	go l.advertiseLoop()
 
 	for {
 		// wait for new transactions fill the mempool
@@ -115,7 +112,9 @@ func (l *Miner) MainLoop() {
 		for {
 			newBlock := l.createBlock()
 			if newBlock != nil {
-				newBlockChan <- newBlock // send new block to advertise thread
+				l.peerMgr.goForEachAlivePeer(func(p string) {
+					l.sendAdvertisement(newBlock.Block.Header, p)
+				})
 				break
 			}
 		}
@@ -140,45 +139,41 @@ func (l *Miner) serveLoop(memPoolFullChan chan<- struct{}) {
 	}
 }
 
-func (l *Miner) advertiseLoop(newBlockChan <-chan *fullBlockWithHash) {
+func (l *Miner) advertiseLoop() {
 	// first advertise genesis block, to attract their own advertisement
-	l.peersMtx.RLock()
 	l.chainMtx.RLock()
-	for addr, _ := range l.Peers {
-		go l.sendAdvertisement(l.mainChain[0].Block.Header, addr)
-	}
+	l.peerMgr.goForEachAlivePeer(func(p string) {
+		go l.sendAdvertisement(l.mainChain[0].Block.Header, p)
+	})
 	l.chainMtx.RUnlock()
-	l.peersMtx.RUnlock()
 
 	for {
-		var blockToAdvertise *fullBlockWithHash
-		select {
-		case blockToAdvertise = <-newBlockChan:
-		case <-time.After(advertiseTimeout):
-			l.chainMtx.RLock()
-			blockToAdvertise = l.mainChain[len(l.mainChain)-1]
-			l.chainMtx.RUnlock()
-		}
+		l.chainMtx.RLock()
+		headerToAdvertise := l.mainChain[len(l.mainChain)-1].Block.Header
+		l.chainMtx.RUnlock()
+
+		peerAddr := l.peerMgr.getNextToAdvertise(headerToAdvertise)
 
 		// advertise new block to peers
-		l.peersMtx.RLock()
-		for addr, _ := range l.Peers {
-			go l.sendAdvertisement(blockToAdvertise.Block.Header, addr)
+		if peerAddr != nil {
+			go l.sendAdvertisement(headerToAdvertise, peerAddr.addr)
+			// here we call onStartAdvertise to force update lastTryAdvertise timestamp
+			l.peerMgr.onStartAdvertise(peerAddr.addr)
+		} else {
+			time.Sleep(advertiseInterval)
 		}
-		l.peersMtx.RUnlock()
 	}
 }
 
 func (l *Miner) sendAdvertisement(header *pb.BlockHeader, addr string) {
-	if addr == l.SelfAddr {
-		return
-	}
+	l.peerMgr.onStartAdvertise(addr)
 
 	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
 	defer cancel()
 	conn, err := grpc.DialContext(ctx, addr, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
 		l.logger.Warnw("failed to dial peer", zap.String("peerAddr", addr), zap.Error(err))
+		l.peerMgr.onFailedAdvertise(addr)
 		return
 	}
 	defer conn.Close()
@@ -191,13 +186,16 @@ func (l *Miner) sendAdvertisement(header *pb.BlockHeader, addr string) {
 		zap.Int64("height", header.Height),
 		zap.String("hash", b2str(Hash(header))),
 		zap.String("peer", addr))
-	_, err = client.AdvertiseBlock(ctx, &pb.AdvertiseBlockReq{
+	ans, err := client.AdvertiseBlock(ctx, &pb.AdvertiseBlockReq{
 		Header: header,
 		Addr:   l.SelfAddr,
 	})
 	if err != nil {
 		l.logger.Errorw("fail to advertise block to peer", zap.Error(err), zap.String("peerAddr", addr))
+		l.peerMgr.onFailedAdvertise(addr)
 		return
+	} else {
+		l.peerMgr.onSucceedAdvertise(addr, ans.Header)
 	}
 }
 
@@ -220,8 +218,11 @@ func (l *Miner) findBlockByHash(hash []byte) *pb.FullBlock {
 }
 
 func (l *Miner) syncBlock(addr string, topHeader *pb.BlockHeader) {
-	// prerequisite: topHeader.length >= mainCHain.length, topHeader.top != mainChain.top
-
+	l.logger.Infow("start syncing according to header",
+		zap.String("hash", b2str(Hash(topHeader))),
+		zap.Int64("height", topHeader.Height),
+		zap.String("peerAddr", addr),
+	)
 	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
 	defer cancel()
 	conn, err := grpc.DialContext(ctx, addr, grpc.WithInsecure(), grpc.WithBlock())
@@ -240,8 +241,8 @@ func (l *Miner) syncBlock(addr string, topHeader *pb.BlockHeader) {
 	l.chainMtx.RUnlock()
 
 	// in case that another sync thread has already completed the syncing
-	if bytes.Equal(l.mainChain[len(l.mainChain)-1].Hash, Hash(topHeader)) {
-		l.logger.Infow("no need to sync actually")
+	if topHeader.Height < int64(len(originalChain)-1) || bytes.Equal(originalChain[len(originalChain)-1].Hash, Hash(topHeader)) {
+		l.logger.Infow("found no need to sync actually before peeking", zap.Int("mainChainHeight", len(originalChain)-1))
 		return
 	}
 
@@ -329,7 +330,8 @@ findMaxSynced:
 
 	// in case that another sync thread has already completed the syncing
 	if bytes.Equal(l.mainChain[len(l.mainChain)-1].Hash, newBlocks[len(newBlocks)-1].Hash) {
-		l.logger.Infow("no need to sync actually")
+		l.logger.Infow("found no need to sync before manipulating chain",
+			zap.Int("mainChainHeight", len(l.mainChain)-1))
 		success = true
 		return
 	}
@@ -352,7 +354,7 @@ findMaxSynced:
 	success = true
 	l.logger.Infow("success to sync block from peer",
 		zap.String("peerAddr", addr),
-		zap.Int("height", len(l.mainChain)),
+		zap.Int("height", len(l.mainChain)-1),
 		zap.Int64("fromHeight", minUnsynced))
 	//----------------------
 	// chain unlocked
