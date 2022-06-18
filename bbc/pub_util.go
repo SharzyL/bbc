@@ -5,6 +5,7 @@ import (
 	"github.com/SharzyL/bbc/bbc/pb"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -44,45 +45,45 @@ func GetLogger() *zap.SugaredLogger {
 	return logger.Sugar()
 }
 
-func PrintBlock(b *pb.FullBlock, indent int) {
-	PrintBlockHeader(b.Header, indent)
+func PrintBlock(b *pb.FullBlock, indent int, f io.Writer) {
+	PrintBlockHeader(b.Header, indent, f)
 	for i, tx := range b.TxList {
 		if tx.Valid {
-			fmt.Printf("  Tx %d [%x]:\n", i, Hash(tx))
-			PrintTx(tx, indent+2)
+			_, _ = fmt.Fprintf(f, "  Tx %d [%x]:\n", i, Hash(tx))
+			PrintTx(tx, indent+2, f)
 		}
 	}
 }
 
-func PrintBlockHeader(h *pb.BlockHeader, indent int) {
+func PrintBlockHeader(h *pb.BlockHeader, indent int, f io.Writer) {
 	indentStr := strings.Repeat(" ", indent)
-	fmt.Printf("%sHash:       %x\n", indentStr, Hash(h))
-	fmt.Printf("%sPrevHash:   %x\n", indentStr, h.PrevHash.Bytes)
-	fmt.Printf("%sMerkleRoot: %x\n", indentStr, h.MerkleRoot.Bytes)
-	fmt.Printf("%sTimestamp:  %s\n", indentStr, time.UnixMilli(h.Timestamp).UTC())
-	fmt.Printf("%sHeight:     %d\n", indentStr, h.Height)
-	fmt.Printf("%sDifficulty: %d\n", indentStr, h.Difficulty)
+	_, _ = fmt.Fprintf(f, "%sHash:       %x\n", indentStr, Hash(h))
+	_, _ = fmt.Fprintf(f, "%sPrevHash:   %x\n", indentStr, h.PrevHash.Bytes)
+	_, _ = fmt.Fprintf(f, "%sMerkleRoot: %x\n", indentStr, h.MerkleRoot.Bytes)
+	_, _ = fmt.Fprintf(f, "%sTimestamp:  %s\n", indentStr, time.UnixMilli(h.Timestamp).UTC())
+	_, _ = fmt.Fprintf(f, "%sHeight:     %d\n", indentStr, h.Height)
+	_, _ = fmt.Fprintf(f, "%sDifficulty: %d\n", indentStr, h.Difficulty)
 }
 
-func PrintTx(tx *pb.Tx, indent int) {
+func PrintTx(tx *pb.Tx, indent int, f io.Writer) {
 	indentStr := strings.Repeat(" ", indent)
-	fmt.Printf("%s  Timestamp: %s\n", indentStr, time.UnixMilli(tx.Timestamp).UTC())
+	_, _ = fmt.Fprintf(f, "%s  Timestamp: %s\n", indentStr, time.UnixMilli(tx.Timestamp).UTC())
 	for j, txin := range tx.TxInList {
-		fmt.Printf("%s  TxIn %d:\n", indentStr, j)
-		fmt.Printf("%s    PrevTx:     %x\n", indentStr, txin.PrevTx.Bytes)
-		fmt.Printf("%s    PrevOutIdx: %d\n", indentStr, txin.PrevOutIdx)
+		_, _ = fmt.Printf("%s  TxIn %d:\n", indentStr, j)
+		_, _ = fmt.Fprintf(f, "%s    PrevTx:     %x\n", indentStr, txin.PrevTx.Bytes)
+		_, _ = fmt.Fprintf(f, "%s    PrevOutIdx: %d\n", indentStr, txin.PrevOutIdx)
 	}
 	for j, txout := range tx.TxOutList {
-		fmt.Printf("%s  TxOut %d:\n", indentStr, j)
-		fmt.Printf("%s    Value: %d\n", indentStr, txout.Value)
-		fmt.Printf("%s    ReceiverPubKey: %x\n", indentStr, txout.ReceiverPubKey.Bytes)
+		_, _ = fmt.Fprintf(f, "%s  TxOut %d:\n", indentStr, j)
+		_, _ = fmt.Fprintf(f, "%s    Value: %d\n", indentStr, txout.Value)
+		_, _ = fmt.Fprintf(f, "%s    ReceiverPubKey: %x\n", indentStr, txout.ReceiverPubKey.Bytes)
 	}
 }
 
-func PrintUtxo(utxo *pb.Utxo, indent int) {
+func PrintUtxo(utxo *pb.Utxo, indent int, f io.Writer) {
 	indentStr := strings.Repeat(" ", indent)
-	fmt.Printf("%sValue: %d\n", indentStr, utxo.Value)
-	fmt.Printf("%sTxHash: %x\n", indentStr, utxo.TxHash.Bytes)
-	fmt.Printf("%sTxOutIdx: %d\n", indentStr, utxo.TxOutIdx)
-	fmt.Printf("%sPubKey: %x\n", indentStr, utxo.PubKey.Bytes)
+	_, _ = fmt.Fprintf(f, "%sValue: %d\n", indentStr, utxo.Value)
+	_, _ = fmt.Fprintf(f, "%sTxHash: %x\n", indentStr, utxo.TxHash.Bytes)
+	_, _ = fmt.Fprintf(f, "%sTxOutIdx: %d\n", indentStr, utxo.TxOutIdx)
+	_, _ = fmt.Fprintf(f, "%sPubKey: %x\n", indentStr, utxo.PubKey.Bytes)
 }

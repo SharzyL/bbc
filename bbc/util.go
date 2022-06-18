@@ -3,6 +3,7 @@ package bbc
 import (
 	"fmt"
 	"math/bits"
+	"time"
 )
 
 func log2Floor(n uint64) int {
@@ -74,6 +75,10 @@ func b2str(b []byte) string {
 	} else {
 		return "<nil>"
 	}
+}
+
+func compactTime(t time.Time) string {
+	return t.Format("2006-01-02T15:04:05.999999-07:00")
 }
 
 func hasLeadingZeros(b []byte, len int) bool {

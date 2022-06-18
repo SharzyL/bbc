@@ -23,8 +23,9 @@ type Wallet struct {
 	PubKey  []byte
 	PrivKey []byte
 
-	Miners []string
-	Addr   map[string][]byte
+	DefaultServer string
+	Miners        []string
+	Addr          map[string][]byte // i.e. pubkey
 
 	Conns   []*grpc.ClientConn
 	Clients []pb.MinerClient
@@ -39,18 +40,29 @@ type WalletConfig struct {
 	Addr    map[string]string `json:"addr"`
 }
 
-func NewWallet(conf *WalletConfig) *Wallet {
+func NewWallet(conf *WalletConfig, server string) *Wallet {
 	pubKey, err := hex.DecodeString(conf.PubKey)
 	if err != nil {
 		log.Panicf("canont parse pubkey '%s': %v", conf.PubKey, err)
+	}
+	if len(pubKey) != bbc.PubKeyLen {
+		log.Panicf("incorrect pubkey len, expected %d, actual %d", bbc.PubKeyLen, len(pubKey))
 	}
 	privKey, err := hex.DecodeString(conf.PrivKey)
 	if err != nil {
 		log.Panicf("canont parse privkey '%s': %v", conf.PrivKey, err)
 	}
+	if len(privKey) != bbc.PrivKeyLen {
+		log.Panicf("incorrect pubkey len, expected %d, actual %d", bbc.PrivKeyLen, len(privKey))
+	}
 
-	if len(conf.Miners) == 0 {
-		log.Panicf("there should be at least one miner in config")
+	var defaultServer string
+	if len(server) != 0 {
+		defaultServer = server
+	} else if len(conf.Miners) != 0 {
+		defaultServer = conf.Miners[0]
+	} else {
+		log.Panicf("no miner in config and no default server specified")
 	}
 
 	addr := make(map[string][]byte)
@@ -59,20 +71,21 @@ func NewWallet(conf *WalletConfig) *Wallet {
 		addr[name] = binPubKey
 	}
 	return &Wallet{
-		PubKey:   pubKey,
-		PrivKey:  privKey,
-		Miners:   conf.Miners,
-		Addr:     addr,
-		Conns:    []*grpc.ClientConn{},
-		Clients:  []pb.MinerClient{},
-		UtxoList: []*pb.Utxo{},
+		PubKey:        pubKey,
+		PrivKey:       privKey,
+		DefaultServer: defaultServer,
+		Miners:        conf.Miners,
+		Addr:          addr,
+		Conns:         []*grpc.ClientConn{},
+		Clients:       []pb.MinerClient{},
+		UtxoList:      []*pb.Utxo{},
 	}
 }
 
 func (w *Wallet) ConnectOne() {
 	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
 	defer cancel()
-	conn, err := grpc.DialContext(ctx, w.Miners[0], grpc.WithInsecure(), grpc.WithBlock())
+	conn, err := grpc.DialContext(ctx, w.DefaultServer, grpc.WithInsecure(), grpc.WithBlock())
 	if err != nil {
 		log.Panicf("cannot dial %s: %v", w.Miners[0], err)
 	}
@@ -122,6 +135,17 @@ func (w *Wallet) GetUtxo() {
 	w.UtxoList = lookupAns.UtxoList
 }
 
+func (w *Wallet) CmdStatus() {
+	w.ConnectOne()
+	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
+	defer cancel()
+	ans, err := w.Clients[0].GetStatus(ctx, &pb.GetStatusReq{})
+	if err != nil {
+		log.Fatalf("failed to GetStatus: %v", err)
+	}
+	fmt.Print(ans.Description)
+}
+
 func (w *Wallet) CmdChain(height int64) {
 	w.ConnectOne()
 	var hash *pb.HashVal
@@ -155,7 +179,7 @@ func (w *Wallet) CmdChain(height int64) {
 	if err != nil {
 		log.Fatalf("failed to GetFullBlock: %v", err)
 	}
-	bbc.PrintBlock(block, 0)
+	bbc.PrintBlock(block, 0, os.Stdout)
 }
 
 func (w *Wallet) CmdBalance(showUtxo bool) {
@@ -166,7 +190,7 @@ func (w *Wallet) CmdBalance(showUtxo bool) {
 	for i, utxo := range w.UtxoList {
 		if showUtxo {
 			fmt.Printf("Utxo %d:\n", i)
-			bbc.PrintUtxo(utxo, 2)
+			bbc.PrintUtxo(utxo, 2, os.Stdout)
 		}
 		balance += utxo.Value
 	}
@@ -253,7 +277,7 @@ func (w *Wallet) CmdTransfer(toAddr string, value uint64, fee uint64, nowait boo
 
 			if findTxAns.BlockHeader != nil {
 				log.Printf("detect the tx in chain on (%s)", w.Miners[0])
-				bbc.PrintBlockHeader(findTxAns.BlockHeader, 0)
+				bbc.PrintBlockHeader(findTxAns.BlockHeader, 0, os.Stdout)
 				return
 			}
 			time.Sleep(time.Second)
@@ -262,20 +286,24 @@ func (w *Wallet) CmdTransfer(toAddr string, value uint64, fee uint64, nowait boo
 }
 
 type walletArgs struct {
-	Config string   `short:"f" default:"conf/wallet.json"`
-	Genkey struct{} `cmd:""`
+	Config string `short:"f" default:"conf/wallet.json" help:"conf file location, should be a json file"`
+	Server string `short:"s" default:"" help:"default server to connected to"`
+
+	// all commands
+	Status struct{} `cmd:"" help:"get server status"`
+	Genkey struct{} `cmd:"" help:"generate key file"`
 	Chain  struct {
 		Height int64 `short:"l" default:"-1"`
-	} `cmd:""`
+	} `cmd:"" help:"inspect main chain on server"`
 	Balance struct {
-		Utxo bool `short:"u"`
-	} `cmd:""`
+		Utxo bool `short:"u" help:"print utxo list"`
+	} `cmd:"" help:"query balance"`
 	Transfer struct {
-		To     string `short:"t" required:"true"`
-		Nowait bool
-		Fee    uint64 `default:"0"`
-		Value  uint64 `arg:""`
-	} `cmd:""`
+		To     string `short:"t" required:"true" help:"the name or addr of recipient"`
+		Nowait bool   `help:"no waiting for the transaction appearing on mainchain"`
+		Fee    uint64 `default:"0" help:"attach transaction fee"`
+		Value  uint64 `arg:"" help:"amount of money to transfer, fee NOT included"`
+	} `cmd:"" help:"transfer money"`
 }
 
 func main() {
@@ -299,10 +327,12 @@ func main() {
 		return
 	}
 
-	wallet := NewWallet(&conf)
+	wallet := NewWallet(&conf, args.Server)
 	defer wallet.Close()
 
 	switch ctx.Command() {
+	case "status":
+		wallet.CmdStatus()
 	case "chain":
 		wallet.CmdChain(args.Chain.Height)
 	case "balance":

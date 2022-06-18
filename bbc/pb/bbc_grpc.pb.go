@@ -22,6 +22,7 @@ const _ = grpc.SupportPackageIsVersion7
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type MinerClient interface {
+	GetStatus(ctx context.Context, in *GetStatusReq, opts ...grpc.CallOption) (*GetStatusAns, error)
 	PeekChain(ctx context.Context, in *PeekChainReq, opts ...grpc.CallOption) (*PeekChainAns, error)
 	AdvertiseBlock(ctx context.Context, in *AdvertiseBlockReq, opts ...grpc.CallOption) (*AdvertiseBlockAns, error)
 	GetFullBlock(ctx context.Context, in *HashVal, opts ...grpc.CallOption) (*FullBlock, error)
@@ -37,6 +38,15 @@ type minerClient struct {
 
 func NewMinerClient(cc grpc.ClientConnInterface) MinerClient {
 	return &minerClient{cc}
+}
+
+func (c *minerClient) GetStatus(ctx context.Context, in *GetStatusReq, opts ...grpc.CallOption) (*GetStatusAns, error) {
+	out := new(GetStatusAns)
+	err := c.cc.Invoke(ctx, "/bbc_proto.Miner/GetStatus", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *minerClient) PeekChain(ctx context.Context, in *PeekChainReq, opts ...grpc.CallOption) (*PeekChainAns, error) {
@@ -106,6 +116,7 @@ func (c *minerClient) LookupUtxo(ctx context.Context, in *PubKey, opts ...grpc.C
 // All implementations must embed UnimplementedMinerServer
 // for forward compatibility
 type MinerServer interface {
+	GetStatus(context.Context, *GetStatusReq) (*GetStatusAns, error)
 	PeekChain(context.Context, *PeekChainReq) (*PeekChainAns, error)
 	AdvertiseBlock(context.Context, *AdvertiseBlockReq) (*AdvertiseBlockAns, error)
 	GetFullBlock(context.Context, *HashVal) (*FullBlock, error)
@@ -120,6 +131,9 @@ type MinerServer interface {
 type UnimplementedMinerServer struct {
 }
 
+func (UnimplementedMinerServer) GetStatus(context.Context, *GetStatusReq) (*GetStatusAns, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetStatus not implemented")
+}
 func (UnimplementedMinerServer) PeekChain(context.Context, *PeekChainReq) (*PeekChainAns, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method PeekChain not implemented")
 }
@@ -152,6 +166,24 @@ type UnsafeMinerServer interface {
 
 func RegisterMinerServer(s grpc.ServiceRegistrar, srv MinerServer) {
 	s.RegisterService(&Miner_ServiceDesc, srv)
+}
+
+func _Miner_GetStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetStatusReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MinerServer).GetStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/bbc_proto.Miner/GetStatus",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MinerServer).GetStatus(ctx, req.(*GetStatusReq))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _Miner_PeekChain_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -287,6 +319,10 @@ var Miner_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "bbc_proto.Miner",
 	HandlerType: (*MinerServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GetStatus",
+			Handler:    _Miner_GetStatus_Handler,
+		},
 		{
 			MethodName: "PeekChain",
 			Handler:    _Miner_PeekChain_Handler,

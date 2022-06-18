@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -16,6 +17,35 @@ type minerRpcHandler struct {
 	l *Miner
 
 	memPoolFullChan chan<- struct{}
+}
+
+func (s *minerRpcHandler) GetStatus(context.Context, *pb.GetStatusReq) (*pb.GetStatusAns, error) {
+	l := s.l
+	sb := &strings.Builder{}
+	_, _ = fmt.Fprintf(sb, "Listen at %s\n", l.SelfAddr)
+
+	l.chainMtx.RLock()
+	_, _ = fmt.Fprintf(sb, "\nChain height: %d\n", len(l.mainChain))
+	l.chainMtx.RUnlock()
+
+	l.memPoolMtx.RLock()
+	_, _ = fmt.Fprintf(sb, "\n%d tx in mempool\n", len(l.memPool))
+	for _, tx := range l.memPool {
+		PrintTx(tx.Tx, 0, sb)
+	}
+	l.memPoolMtx.RUnlock()
+
+	l.peerMgr.mtx.RLock()
+	_, _ = fmt.Fprintf(sb, "\nConnected to %d peers\n", len(l.peerMgr.peers))
+	for addr, peer := range l.peerMgr.peers {
+		_, _ = fmt.Fprintf(sb, " - %s (isDead: %v) (h: %d) (lastAdv: %s (failed: %v))\n",
+			addr, peer.isDead, peer.lastRecvAdvertiseHeight,
+			compactTime(peer.lastTryAdvertise),
+			peer.firstFailedAdvertise.IsZero())
+	}
+	l.peerMgr.mtx.RUnlock()
+
+	return &pb.GetStatusAns{Description: sb.String()}, nil
 }
 
 func (s *minerRpcHandler) PeekChain(ctx context.Context, req *pb.PeekChainReq) (ans *pb.PeekChainAns, err error) {

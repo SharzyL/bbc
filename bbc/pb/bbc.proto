@@ -5,6 +5,8 @@ option go_package = "github.com/SharzyL/bbc/pb";
 package bbc_proto;
 
 service Miner {
+  rpc GetStatus(GetStatusReq) returns (GetStatusAns);
+
   rpc PeekChain(PeekChainReq) returns (PeekChainAns);
   rpc AdvertiseBlock(AdvertiseBlockReq) returns (AdvertiseBlockAns);
 
@@ -68,6 +70,17 @@ message FullBlock {
   BlockHeader header = 1;
   repeated Tx tx_list = 2;
   repeated TxMerkleNode merkle_tree = 3;
+}
+
+//--------------------
+// GetStatus
+//--------------------
+message GetStatusReq {
+
+}
+
+message GetStatusAns {
+  string description = 1;
 }
 
 //--------------------
