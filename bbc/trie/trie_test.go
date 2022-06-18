@@ -1,6 +1,10 @@
 package trie
 
-import "testing"
+import (
+	"crypto/ed25519"
+	"math/rand"
+	"testing"
+)
 
 func TestTrie_Simple(t *testing.T) {
 	trie := NewTrie()
@@ -21,5 +25,15 @@ func TestTrie_Simple(t *testing.T) {
 	}
 	if val, ok := trie.Search([]byte{1, 5, 9}).(int); !ok || val != 5 {
 		t.Errorf("find 159 failed: %x", val)
+	}
+}
+
+func BenchmarkVerify(b *testing.B) {
+	pubKey, privKey, _ := ed25519.GenerateKey(nil)
+	msg := make([]byte, 1024)
+	_, _ = rand.Read(msg)
+	sig := ed25519.Sign(privKey, msg)
+	for i := 0; i < b.N; i++ {
+		ed25519.Verify(pubKey, msg, sig)
 	}
 }

@@ -18,8 +18,9 @@ const rpcTimeout = 1 * time.Second
 
 func main() {
 	var opts struct {
-		IntervalMs int    `short:"f" long:"freq" default:"100"`
-		Miner      string `short:"m" long:"miner" required:"true"`
+		Miner       string `short:"m" long:"miner" required:"true"`
+		NumWorks    int    `short:"n" default:"1000"`
+		Concurrency int    `short:"c" default:"20"`
 	}
 	_, err := flags.Parse(&opts)
 	if err != nil {
@@ -35,15 +36,28 @@ func main() {
 		TxOutList: []*pb.TxOut{},
 		Timestamp: time.Now().UnixMilli(),
 	}
-	totalWorks := 500
-	poolSize := 20
-	pool := make(chan struct{}, poolSize)
+	pool := make(chan struct{}, opts.Concurrency)
+
 	startTime := time.Now()
 
 	wg := sync.WaitGroup{}
-	wg.Add(totalWorks)
-	for i := 0; i < totalWorks; i++ {
+	wg.Add(opts.NumWorks)
+
+	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
+	defer cancel()
+	conn, err := grpc.DialContext(ctx, opts.Miner, grpc.WithInsecure(), grpc.WithBlock())
+	if err != nil {
+		log.Panicf("failed to dial peer: %v", err)
+		return
+	}
+	defer conn.Close()
+
+	client := pb.NewMinerClient(conn)
+
+	for i := 0; i < opts.NumWorks; i++ {
 		go func(i int) {
+			defer wg.Done()
+
 			pool <- struct{}{}
 			defer func() {
 				<-pool
@@ -51,18 +65,6 @@ func main() {
 
 			log.Printf("start %d", i)
 			grStartTime := time.Now()
-			defer wg.Done()
-			ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
-			defer cancel()
-			conn, err := grpc.DialContext(ctx, opts.Miner, grpc.WithInsecure(), grpc.WithBlock())
-			if err != nil {
-				log.Panicf("failed to dial peer: %v", err)
-				return
-			}
-			defer conn.Close()
-
-			client := pb.NewMinerClient(conn)
-
 			ctx, cancel = context.WithTimeout(context.Background(), rpcTimeout)
 			defer cancel()
 
@@ -76,5 +78,5 @@ func main() {
 	wg.Wait()
 
 	totalTime := time.Now().Sub(startTime)
-	fmt.Printf("finish after %d ms\n", totalTime.Milliseconds())
+	fmt.Printf("%d tasks finished after %d ms\n", opts.NumWorks, totalTime.Milliseconds())
 }

@@ -3,8 +3,6 @@ package bbc
 import "time"
 
 // creating new block
-const newBlockTime = 10 * time.Second
-const blockLimit = 128
 const maxTimeErrorAllowed = 2 * time.Second
 
 // advertisement
@@ -18,8 +16,8 @@ const peekChainDefaultLimit = int64(10)
 const feePerTx = uint64(1)
 
 // mining
-const defaultMiningDifficulty = 24 // mining difficulty at the first block
-const miningDifficultyBlocks = 10
+const defaultMiningDifficulty = 25 // mining difficulty at the first block
+const miningDifficultyBlocks = 10  // recalculate difficulty accroding to recent x blocks
 const expectedMiningTime = 10 * time.Second
 
 // general rpc config

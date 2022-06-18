@@ -17,7 +17,7 @@ const PrivKeyLen = ed25519.PrivateKeySize // 64
 const SigLen = ed25519.SignatureSize      // 64
 const NounceLen = 32
 
-const MinerReward = uint64(10000)
+const MinerReward = uint64(1000000)
 
 type HashState = hash.Hash
 

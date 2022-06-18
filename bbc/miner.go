@@ -128,27 +128,15 @@ func NewMiner(opts *MinerOptions) *Miner {
 }
 
 func (l *Miner) MainLoop() {
-	memPoolFullChan := make(chan struct{})
-
-	go l.serveLoop(memPoolFullChan)
+	go l.serveLoop()
 	go l.advertiseLoop()
 
 	for {
-		// wait for new transactions fill the mempool
-		select {
-		case <-memPoolFullChan:
-		case <-time.After(newBlockTime):
-		}
-
-		// create new block
-		for {
-			newBlock := l.createBlock()
-			if newBlock != nil {
-				l.peerMgr.goForEachAlivePeer(func(p string) {
-					l.sendAdvertisement(newBlock.Block.Header, p)
-				})
-				break
-			}
+		newBlock := l.createBlock()
+		if newBlock != nil {
+			l.peerMgr.goForEachAlivePeer(func(p string) {
+				l.sendAdvertisement(newBlock.Block.Header, p)
+			})
 		}
 	}
 }
@@ -189,7 +177,7 @@ func (l *Miner) CleanDiskBlocks() {
 	}
 }
 
-func (l *Miner) serveLoop(memPoolFullChan chan<- struct{}) {
+func (l *Miner) serveLoop() {
 	lis, err := net.Listen("tcp", l.ListenAddr)
 	if err != nil {
 		l.logger.Fatalw("failed to listen", zap.Error(err))
@@ -197,8 +185,7 @@ func (l *Miner) serveLoop(memPoolFullChan chan<- struct{}) {
 	s := grpc.NewServer()
 	defer s.GracefulStop()
 	pb.RegisterMinerServer(s, &minerRpcHandler{
-		l:               l,
-		memPoolFullChan: memPoolFullChan,
+		l: l,
 	})
 	l.logger.Infow("starting mainloop",
 		zap.String("listen", l.ListenAddr), zap.String("selfAddr", l.SelfAddr))
@@ -521,9 +508,6 @@ func (l *Miner) createBlock() *fullBlockWithHash {
 	minUncheckedIdx := 0
 	for i, tx := range l.memPool {
 		minUncheckedIdx = i + 1
-		if len(txList) >= blockLimit {
-			break
-		}
 
 		if txW := l.findTxByHash(Hash(tx.Tx)); txW != nil && l.isBlockOnChain(txW.Block) {
 			// ignore tx that is already on the chain

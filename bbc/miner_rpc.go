@@ -15,8 +15,6 @@ import (
 type minerRpcHandler struct {
 	pb.UnimplementedMinerServer
 	l *Miner
-
-	memPoolFullChan chan<- struct{}
 }
 
 func (s *minerRpcHandler) GetStatus(context.Context, *pb.GetStatusReq) (*pb.GetStatusAns, error) {
@@ -171,6 +169,13 @@ func (s *minerRpcHandler) FindTx(ctx context.Context, hash *pb.HashVal) (*pb.TxI
 func (s *minerRpcHandler) UploadTx(ctx context.Context, tx *pb.Tx) (*pb.UploadTxAns, error) {
 	l := s.l
 	l.logger.Debugw("receive UploadTx request", zap.Int64("t", tx.Timestamp))
+
+	startT := time.Now()
+	defer func() {
+		dur := time.Now().Sub(startT)
+		l.logger.Debugw("handle UploadTx ok", zap.Duration("dur", dur))
+	}()
+
 	if !tx.Valid {
 		return nil, fmt.Errorf("why send me an invalid tx")
 	}
@@ -199,12 +204,6 @@ func (s *minerRpcHandler) UploadTx(ctx context.Context, tx *pb.Tx) (*pb.UploadTx
 	txf := &txWithFee{Tx: tx, Fee: fee}
 
 	l.memPool = append(l.memPool, txf)
-	if len(l.memPool) >= blockLimit-1 { // reserve one space for coinbase
-		select {
-		case s.memPoolFullChan <- struct{}{}:
-		case <-time.After(time.Millisecond):
-		}
-	}
 	l.logger.Debugw("finish receiving tx",
 		zap.Int64("t", tx.Timestamp),
 		zap.Uint64("fee", fee),
