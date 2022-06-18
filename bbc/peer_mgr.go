@@ -37,7 +37,10 @@ func newPeerMgr(logger *zap.SugaredLogger) *peerMgr {
 }
 
 func (p *peerMgr) addPeer(addr string) {
+	p.mtx.Lock()
+	defer p.mtx.Unlock()
 	p.peers[addr] = &peerInfo{addr: addr}
+	p.logger.Infow("add new peer", zap.String("addr", addr))
 }
 
 func (p *peerMgr) getNextToAdvertise(header *pb.BlockHeader) *peerInfo {

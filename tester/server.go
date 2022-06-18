@@ -12,9 +12,10 @@ import (
 
 func main() {
 	var opts struct {
-		Key  string   `short:"k" required:"true"`
-		Addr string   `short:"a" required:"true"`
-		Peer []string `short:"p"`
+		Key    string   `short:"k" required:"true"`
+		Listen string   `short:"l" default:"0.0.0.0:30001"`
+		Addr   string   `short:"a"`
+		Peer   []string `short:"p"`
 
 		Loglevel string
 		Verbose  bool
@@ -47,6 +48,6 @@ func main() {
 	if opts.Verbose {
 		loglevel = "DEBUG"
 	}
-	miner := bbc.NewMiner(pubKey, privKey, opts.Addr, opts.Peer, loglevel)
+	miner := bbc.NewMiner(pubKey, privKey, opts.Listen, opts.Addr, opts.Peer, loglevel)
 	miner.MainLoop()
 }

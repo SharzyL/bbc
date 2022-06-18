@@ -2,9 +2,11 @@ package bbc
 
 import (
 	"bytes"
+	"container/list"
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,7 +20,8 @@ import (
 
 // Miner should be not be initialized manually, use NewMiner instead
 type Miner struct {
-	SelfAddr string // network addr of self
+	ListenAddr string // network addr to bind to
+	SelfAddr   string // network addr of self, which can be accessed by others
 
 	minerPubKey  []byte
 	minerPrivKey []byte
@@ -31,10 +34,11 @@ type Miner struct {
 
 	memPool []*txWithFee // transactions waiting to be packed into a block
 
-	rpcHandler  minerRpcHandler
-	peerClients []*pb.MinerClient
+	rpcHandler minerRpcHandler
 
-	peerMgr *peerMgr
+	peerMgr               *peerMgr
+	hashesUnderSyncing    list.List // store a list of headers that is being synced, to avoid repeated sync
+	hashesUnderSyncingMtx *sync.RWMutex
 
 	memPoolMtx      *sync.RWMutex
 	chainMtx        *sync.RWMutex
@@ -43,7 +47,7 @@ type Miner struct {
 	logger *zap.SugaredLogger
 }
 
-func NewMiner(pubKey []byte, privKey []byte, selfAddr string, peerAddrList []string, loglevel string) *Miner {
+func NewMiner(pubKey []byte, privKey []byte, listenAddr string, selfAddr string, peerAddrList []string, loglevel string) *Miner {
 	logger := GetLogger(loglevel)
 
 	if len(pubKey) != PubKeyLen {
@@ -56,8 +60,17 @@ func NewMiner(pubKey []byte, privKey []byte, selfAddr string, peerAddrList []str
 	memPoolMtx := &sync.RWMutex{}
 	chainMtx := &sync.RWMutex{}
 
+	if len(selfAddr) == 0 {
+		selfAddr = listenAddr
+	}
+
+	if strings.HasPrefix(selfAddr, "0.0.0.0:") || strings.HasPrefix(selfAddr, "[::]:") {
+		logger.Panic("cannot use zero address as self address", zap.String("selfAddr", selfAddr))
+	}
+
 	miner := Miner{
-		SelfAddr: selfAddr,
+		ListenAddr: listenAddr,
+		SelfAddr:   selfAddr,
 
 		minerPubKey:  pubKey,
 		minerPrivKey: privKey,
@@ -71,7 +84,9 @@ func NewMiner(pubKey []byte, privKey []byte, selfAddr string, peerAddrList []str
 
 		rpcHandler: minerRpcHandler{}, // init self pointer later
 
-		peerMgr: newPeerMgr(logger),
+		peerMgr:               newPeerMgr(logger),
+		hashesUnderSyncing:    list.List{},
+		hashesUnderSyncingMtx: &sync.RWMutex{},
 
 		memPoolMtx:      memPoolMtx,
 		chainMtx:        chainMtx,
@@ -122,7 +137,7 @@ func (l *Miner) MainLoop() {
 }
 
 func (l *Miner) serveLoop(memPoolFullChan chan<- struct{}) {
-	lis, err := net.Listen("tcp", l.SelfAddr)
+	lis, err := net.Listen("tcp", l.ListenAddr)
 	if err != nil {
 		l.logger.Fatalw("failed to listen", zap.Error(err))
 	}
@@ -133,7 +148,7 @@ func (l *Miner) serveLoop(memPoolFullChan chan<- struct{}) {
 		memPoolFullChan: memPoolFullChan,
 	})
 	l.logger.Infow("starting mainloop",
-		zap.String("addr", l.SelfAddr))
+		zap.String("listen", l.ListenAddr), zap.String("selfAddr", l.SelfAddr))
 	if err := s.Serve(lis); err != nil {
 		l.logger.Fatalw("failed to serve %v", zap.Error(err))
 	}
@@ -168,6 +183,7 @@ func (l *Miner) advertiseLoop() {
 func (l *Miner) sendAdvertisement(header *pb.BlockHeader, addr string) {
 	l.peerMgr.onStartAdvertise(addr)
 
+	// connect to peer
 	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
 	defer cancel()
 	conn, err := grpc.DialContext(ctx, addr, grpc.WithInsecure(), grpc.WithBlock())
@@ -180,6 +196,17 @@ func (l *Miner) sendAdvertisement(header *pb.BlockHeader, addr string) {
 
 	client := pb.NewMinerClient(conn)
 
+	// prepare peers
+	var peers []string
+	l.peerMgr.mtx.RLock()
+	for addr, peer := range l.peerMgr.peers {
+		if !peer.isDead {
+			peers = append(peers, addr)
+		}
+	}
+	l.peerMgr.mtx.RUnlock()
+
+	// send advertisement
 	ctx, cancel = context.WithTimeout(context.Background(), rpcTimeout)
 	defer cancel()
 	l.logger.Debugw("advertise block to peer",
@@ -189,6 +216,7 @@ func (l *Miner) sendAdvertisement(header *pb.BlockHeader, addr string) {
 	ans, err := client.AdvertiseBlock(ctx, &pb.AdvertiseBlockReq{
 		Header: header,
 		Addr:   l.SelfAddr,
+		Peers:  peers,
 	})
 	if err != nil {
 		l.logger.Errorw("fail to advertise block to peer", zap.Error(err), zap.String("peerAddr", addr))
@@ -199,6 +227,9 @@ func (l *Miner) sendAdvertisement(header *pb.BlockHeader, addr string) {
 			zap.Int64("peerHeight", ans.Header.Height),
 			zap.String("hash", b2str(Hash(header))),
 			zap.String("peer", addr))
+		if ans.Header.Height > header.Height {
+			go l.syncBlock(addr, ans.Header)
+		}
 		l.peerMgr.onSucceedAdvertise(addr, ans.Header)
 	}
 }
@@ -222,11 +253,42 @@ func (l *Miner) findBlockByHash(hash []byte) *pb.FullBlock {
 }
 
 func (l *Miner) syncBlock(addr string, topHeader *pb.BlockHeader) {
+	headerHash := Hash(topHeader)
+
+	// to prevent repeated sync block
+	l.hashesUnderSyncingMtx.Lock()
+	for e := l.hashesUnderSyncing.Front(); e != nil; e = e.Next() {
+		if hash := e.Value.([]byte); bytes.Equal(headerHash, hash) {
+			l.logger.Debugw("abort syncing because it is already running",
+				zap.String("hash", b2str(Hash(topHeader))),
+				zap.Int64("height", topHeader.Height),
+				zap.String("peerAddr", addr),
+			)
+			l.hashesUnderSyncingMtx.Unlock()
+			return
+		}
+	}
+	l.hashesUnderSyncing.PushFront(headerHash)
+	l.hashesUnderSyncingMtx.Unlock()
+
+	defer func() {
+		l.hashesUnderSyncingMtx.Lock()
+		for e := l.hashesUnderSyncing.Front(); e != nil; e = e.Next() {
+			if hash := e.Value.([]byte); bytes.Equal(headerHash, hash) {
+				l.hashesUnderSyncing.Remove(e)
+				break
+			}
+		}
+		l.hashesUnderSyncingMtx.Unlock()
+	}()
+
 	l.logger.Infow("start syncing according to header",
 		zap.String("hash", b2str(Hash(topHeader))),
 		zap.Int64("height", topHeader.Height),
 		zap.String("peerAddr", addr),
 	)
+
+	// connecting to peer
 	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
 	defer cancel()
 	conn, err := grpc.DialContext(ctx, addr, grpc.WithInsecure(), grpc.WithBlock())
@@ -253,6 +315,7 @@ func (l *Miner) syncBlock(addr string, topHeader *pb.BlockHeader) {
 	headersPending := []*pb.BlockHeader{topHeader} // a list of headers, will later be checked
 	height := topHeader.Height                     // expected height of the last checked header
 
+	// collecting hashes to sync
 findMaxSynced:
 	for {
 		for _, header := range headersPending {

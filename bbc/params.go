@@ -23,4 +23,4 @@ const miningDifficultyBlocks = 10
 const expectedMiningTime = 10 * time.Second
 
 // general rpc config
-const rpcTimeout = 10 * time.Second
+const rpcTimeout = 3 * time.Second

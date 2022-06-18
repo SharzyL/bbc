@@ -105,6 +105,7 @@ message PeekChainAns {
 message AdvertiseBlockReq {
   BlockHeader header = 1;
   string addr = 2;
+  repeated string peers = 3;
 }
 
 message AdvertiseBlockAns {

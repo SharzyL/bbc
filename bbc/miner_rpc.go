@@ -127,6 +127,18 @@ func (s *minerRpcHandler) AdvertiseBlock(ctx context.Context, req *pb.AdvertiseB
 	} else if header.Height < mainChainHeight {
 		go l.sendAdvertisement(topHeader, req.Addr)
 	}
+
+	// update peer list
+	l.peerMgr.mtx.Lock()
+	for _, peer := range req.Peers {
+		_, found := l.peerMgr.peers[peer]
+		if !found && peer != l.SelfAddr {
+			l.peerMgr.addPeer(peer)
+			go l.sendAdvertisement(topHeader, peer)
+		}
+	}
+	l.peerMgr.mtx.Unlock()
+
 	return &pb.AdvertiseBlockAns{Header: topHeader}, nil
 }
 
