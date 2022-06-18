@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +38,7 @@ type Miner struct {
 	rpcHandler minerRpcHandler
 
 	peerMgr               *peerMgr
+	storageMgr            *storageMgr
 	hashesUnderSyncing    list.List // store a list of headers that is being synced, to avoid repeated sync
 	hashesUnderSyncingMtx *sync.RWMutex
 
@@ -47,33 +49,47 @@ type Miner struct {
 	logger *zap.SugaredLogger
 }
 
-func NewMiner(pubKey []byte, privKey []byte, listenAddr string, selfAddr string, peerAddrList []string, loglevel string) *Miner {
-	logger := GetLogger(loglevel)
+type MinerOptions struct {
+	PubKey  []byte
+	PrivKey []byte
 
-	if len(pubKey) != PubKeyLen {
-		logger.Fatalw("incorrect pubKey length", zap.Int("expect", PubKeyLen), zap.Int("actual", len(pubKey)))
+	ListenAddr string
+	SelfAddr   string
+
+	PeerAddrList []string
+	Loglevel     string
+
+	StorageDir string
+}
+
+func NewMiner(opts *MinerOptions) *Miner {
+	logger := GetLogger(opts.Loglevel)
+
+	if len(opts.PubKey) != PubKeyLen {
+		logger.Fatalw("incorrect pubKey length", zap.Int("expect", PubKeyLen), zap.Int("actual", len(opts.PubKey)))
 	}
-	if len(privKey) != PrivKeyLen {
-		logger.Fatalw("incorrect privKey length", zap.Int("expect", PrivKeyLen), zap.Int("actual", len(privKey)))
+	if len(opts.PrivKey) != PrivKeyLen {
+		logger.Fatalw("incorrect privKey length", zap.Int("expect", PrivKeyLen), zap.Int("actual", len(opts.PrivKey)))
 	}
 
 	memPoolMtx := &sync.RWMutex{}
 	chainMtx := &sync.RWMutex{}
 
-	if len(selfAddr) == 0 {
-		selfAddr = listenAddr
+	if strings.HasPrefix(opts.SelfAddr, "0.0.0.0:") || strings.HasPrefix(opts.SelfAddr, "[::]:") {
+		logger.Panic("cannot use zero address as self address", zap.String("selfAddr", opts.SelfAddr))
 	}
 
-	if strings.HasPrefix(selfAddr, "0.0.0.0:") || strings.HasPrefix(selfAddr, "[::]:") {
-		logger.Panic("cannot use zero address as self address", zap.String("selfAddr", selfAddr))
+	sMgr, err := newStorageMgr(opts.StorageDir)
+	if err != nil {
+		logger.Panic("failed to create storage: %v", zap.Error(err))
 	}
 
 	miner := Miner{
-		ListenAddr: listenAddr,
-		SelfAddr:   selfAddr,
+		ListenAddr: opts.ListenAddr,
+		SelfAddr:   opts.SelfAddr,
 
-		minerPubKey:  pubKey,
-		minerPrivKey: privKey,
+		minerPubKey:  opts.PubKey,
+		minerPrivKey: opts.PrivKey,
 
 		mainChain: make([]*fullBlockWithHash, 0, 1), // reserve space for genesis block
 
@@ -85,6 +101,7 @@ func NewMiner(pubKey []byte, privKey []byte, listenAddr string, selfAddr string,
 		rpcHandler: minerRpcHandler{}, // init self pointer later
 
 		peerMgr:               newPeerMgr(logger),
+		storageMgr:            sMgr,
 		hashesUnderSyncing:    list.List{},
 		hashesUnderSyncingMtx: &sync.RWMutex{},
 
@@ -96,11 +113,11 @@ func NewMiner(pubKey []byte, privKey []byte, listenAddr string, selfAddr string,
 	}
 	miner.rpcHandler.l = &miner
 
-	for _, peerAddr := range peerAddrList {
+	for _, peerAddr := range opts.PeerAddrList {
 		miner.peerMgr.addPeer(peerAddr)
 	}
 
-	logger.Infow("add miner pubkey", zap.String("hash", b2str(pubKey)))
+	logger.Infow("add miner pubkey", zap.String("hash", b2str(opts.PubKey)))
 
 	genesisBlock := makeFullBlockWithHash(GenesisBlock())
 	miner.hashToBlock.Insert(genesisBlock.Hash, genesisBlock.Block)
@@ -136,6 +153,42 @@ func (l *Miner) MainLoop() {
 	}
 }
 
+func (l *Miner) LoadBlocksFromDisk() {
+	h := int64(1)
+	for {
+		b, err := l.storageMgr.LoadBlock(h)
+		if err != nil {
+			if os.IsNotExist(err) {
+				break
+			} else {
+				l.logger.Panic("failed to load block of height %d: %v", h, err)
+			}
+		}
+
+		fb := makeFullBlockWithHash(b)
+		err = l.verifyBlock(b)
+		if err != nil {
+			l.logger.Panic("failed to verify block from disk", zap.Int64("height", h), zap.Error(err))
+		}
+		l.mainChain = append(l.mainChain, fb)
+		l.hashToBlock.Insert(Hash(b.Header), b)
+		l.updateTxInfo(fb)
+		h++
+	}
+	if h == 1 {
+		l.logger.Infow("no block is loaded from disk", zap.String("folder", l.storageMgr.Folder))
+	} else {
+		l.logger.Infow("successfully load blocks from disk", zap.Int64("height", h), zap.String("folder", l.storageMgr.Folder))
+	}
+}
+
+func (l *Miner) CleanDiskBlocks() {
+	err := l.storageMgr.cleanBlocks()
+	if err != nil {
+		l.logger.Panic("failed to clean blocks: %v", err)
+	}
+}
+
 func (l *Miner) serveLoop(memPoolFullChan chan<- struct{}) {
 	lis, err := net.Listen("tcp", l.ListenAddr)
 	if err != nil {
@@ -162,6 +215,7 @@ func (l *Miner) advertiseLoop() {
 	})
 	l.chainMtx.RUnlock()
 
+	time.Sleep(advertiseInterval)
 	for {
 		l.chainMtx.RLock()
 		headerToAdvertise := l.mainChain[len(l.mainChain)-1].Block.Header
@@ -418,6 +472,14 @@ findMaxSynced:
 		l.updateTxInfo(b)
 		l.miningInterrupt.Store(true)
 	}
+	for _, b := range newBlocks {
+		err = l.storageMgr.DumpBlock(b.Block)
+		if err != nil {
+			// notice that we do not think this is a critical error
+			l.logger.Errorw("failed to dump block to disk whic syncing", zap.Error(err), zap.Int64("height", b.Block.Header.Height))
+			break
+		}
+	}
 	success = true
 	l.logger.Infow("success to sync block from peer",
 		zap.String("peerAddr", addr),
@@ -559,6 +621,10 @@ func (l *Miner) createBlock() *fullBlockWithHash {
 		l.mainChain = append(l.mainChain, fb)
 		l.hashToBlock.Insert(Hash(b.Header), b)
 		l.updateTxInfo(fb)
+		err := l.storageMgr.DumpBlock(b)
+		if err != nil {
+			l.logger.Error("failed to dump block while creating new block", zap.Error(err), zap.Int64("height", b.Header.Height))
+		}
 
 		//-----------------------
 		// memPool locked

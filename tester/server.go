@@ -17,6 +17,9 @@ func main() {
 		Addr   string   `short:"a"`
 		Peer   []string `short:"p"`
 
+		Storage string `short:"s" default:".bbc_storage"`
+		Clean   bool
+
 		Loglevel string
 		Verbose  bool
 	}
@@ -44,10 +47,29 @@ func main() {
 		log.Panicf("canont parse privkey '%s': %v", keys.PrivKey, err)
 	}
 
-	loglevel := opts.Loglevel
 	if opts.Verbose {
-		loglevel = "DEBUG"
+		opts.Loglevel = "DEBUG"
 	}
-	miner := bbc.NewMiner(pubKey, privKey, opts.Listen, opts.Addr, opts.Peer, loglevel)
+
+	if len(opts.Addr) == 0 {
+		opts.Addr = opts.Listen
+	}
+
+	minerOpts := &bbc.MinerOptions{
+		PubKey:       pubKey,
+		PrivKey:      privKey,
+		ListenAddr:   opts.Listen,
+		SelfAddr:     opts.Addr,
+		PeerAddrList: opts.Peer,
+		Loglevel:     opts.Loglevel,
+		StorageDir:   opts.Storage,
+	}
+	miner := bbc.NewMiner(minerOpts)
+	if opts.Clean {
+		miner.CleanDiskBlocks()
+	} else {
+		miner.LoadBlocksFromDisk()
+	}
+
 	miner.MainLoop()
 }

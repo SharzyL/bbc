@@ -73,7 +73,7 @@ func PrintTx(tx *pb.Tx, indent int, f io.Writer) {
 	indentStr := strings.Repeat(" ", indent)
 	_, _ = fmt.Fprintf(f, "%s  Timestamp: %s\n", indentStr, time.UnixMilli(tx.Timestamp).UTC())
 	for j, txin := range tx.TxInList {
-		_, _ = fmt.Printf("%s  TxIn %d:\n", indentStr, j)
+		_, _ = fmt.Fprintf(f, "%s  TxIn %d:\n", indentStr, j)
 		_, _ = fmt.Fprintf(f, "%s    PrevTx:     %x\n", indentStr, txin.PrevTx.Bytes)
 		_, _ = fmt.Fprintf(f, "%s    PrevOutIdx: %d\n", indentStr, txin.PrevOutIdx)
 	}
