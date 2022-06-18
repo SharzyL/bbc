@@ -11,13 +11,17 @@ import (
 	"time"
 )
 
-func GetLogger() *zap.SugaredLogger {
+func GetLogger(level string) *zap.SugaredLogger {
 	config := zap.NewDevelopmentConfig()
 
-	loglevelStr := os.Getenv("LOG_LEVEL")
+	loglevelStr := strings.ToUpper(level)
 	if len(loglevelStr) == 0 {
-		loglevelStr = "INFO"
+		loglevelStr = os.Getenv("LOG_LEVEL")
+		if len(loglevelStr) == 0 {
+			loglevelStr = "INFO"
+		}
 	}
+
 	var loglevel zapcore.Level
 	switch loglevelStr {
 	case "DEBUG":

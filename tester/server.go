@@ -15,6 +15,9 @@ func main() {
 		Key  string   `short:"k" required:"true"`
 		Addr string   `short:"a" required:"true"`
 		Peer []string `short:"p"`
+
+		Loglevel string
+		Verbose  bool
 	}
 	var keys struct {
 		PubKey  string `json:"pubKey"`
@@ -39,6 +42,11 @@ func main() {
 	if err != nil {
 		log.Panicf("canont parse privkey '%s': %v", keys.PrivKey, err)
 	}
-	miner := bbc.NewMiner(pubKey, privKey, opts.Addr, opts.Peer)
+
+	loglevel := opts.Loglevel
+	if opts.Verbose {
+		loglevel = "DEBUG"
+	}
+	miner := bbc.NewMiner(pubKey, privKey, opts.Addr, opts.Peer, loglevel)
 	miner.MainLoop()
 }

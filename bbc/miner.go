@@ -43,8 +43,8 @@ type Miner struct {
 	logger *zap.SugaredLogger
 }
 
-func NewMiner(pubKey []byte, privKey []byte, selfAddr string, peerAddrList []string) *Miner {
-	logger := GetLogger()
+func NewMiner(pubKey []byte, privKey []byte, selfAddr string, peerAddrList []string, loglevel string) *Miner {
+	logger := GetLogger(loglevel)
 
 	if len(pubKey) != PubKeyLen {
 		logger.Fatalw("incorrect pubKey length", zap.Int("expect", PubKeyLen), zap.Int("actual", len(pubKey)))
