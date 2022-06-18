@@ -2,9 +2,9 @@ name: Build test server binary
 
 on:
   push:
-    branches: [ master ]
+    branches: [ goshujin ]
   pull_request:
-    branches: [ master ]
+    branches: [ goshujin ]
 
 jobs:
 
