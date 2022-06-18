@@ -195,6 +195,10 @@ func (l *Miner) sendAdvertisement(header *pb.BlockHeader, addr string) {
 		l.peerMgr.onFailedAdvertise(addr)
 		return
 	} else {
+		l.logger.Debugw("advertise block to peer successful",
+			zap.Int64("peerHeight", ans.Header.Height),
+			zap.String("hash", b2str(Hash(header))),
+			zap.String("peer", addr))
 		l.peerMgr.onSucceedAdvertise(addr, ans.Header)
 	}
 }
