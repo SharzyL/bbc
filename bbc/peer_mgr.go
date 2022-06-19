@@ -37,8 +37,6 @@ func newPeerMgr(logger *zap.SugaredLogger) *peerMgr {
 }
 
 func (p *peerMgr) addPeer(addr string) {
-	p.mtx.Lock()
-	defer p.mtx.Unlock()
 	p.peers[addr] = &peerInfo{addr: addr}
 	p.logger.Infow("add new peer", zap.String("addr", addr))
 }
@@ -47,7 +45,6 @@ func (p *peerMgr) getNextToAdvertise(header *pb.BlockHeader) *peerInfo {
 	var minTryAdvTime time.Time
 	var peerToAdvertise *peerInfo
 
-	p.mtx.RLock()
 	for _, peer := range p.peers {
 		if peer.isDead {
 			continue
@@ -73,7 +70,6 @@ func (p *peerMgr) getNextToAdvertise(header *pb.BlockHeader) *peerInfo {
 			peerToAdvertise = peer
 		}
 	}
-	p.mtx.RUnlock()
 
 	if peerToAdvertise != nil {
 		return peerToAdvertise
@@ -83,8 +79,6 @@ func (p *peerMgr) getNextToAdvertise(header *pb.BlockHeader) *peerInfo {
 }
 
 func (p *peerMgr) onRecvAdvertise(addr string, header *pb.BlockHeader) *peerInfo {
-	p.mtx.Lock()
-	defer p.mtx.Unlock()
 	peer, found := p.peers[addr]
 	if !found {
 		peer = &peerInfo{addr: addr}
@@ -98,8 +92,6 @@ func (p *peerMgr) onRecvAdvertise(addr string, header *pb.BlockHeader) *peerInfo
 }
 
 func (p *peerMgr) onStartAdvertise(addr string) {
-	p.mtx.Lock()
-	defer p.mtx.Unlock()
 	peer := p.peers[addr]
 	if peer == nil {
 		panic("nil peer")
@@ -108,8 +100,6 @@ func (p *peerMgr) onStartAdvertise(addr string) {
 }
 
 func (p *peerMgr) onFailedAdvertise(addr string) {
-	p.mtx.Lock()
-	defer p.mtx.Unlock()
 	peer := p.peers[addr]
 	if peer == nil {
 		panic("nil peer")
@@ -126,8 +116,6 @@ func (p *peerMgr) onFailedAdvertise(addr string) {
 }
 
 func (p *peerMgr) onSucceedAdvertise(addr string, header *pb.BlockHeader) {
-	p.mtx.Lock()
-	defer p.mtx.Unlock()
 	peer := p.peers[addr]
 	if peer == nil {
 		panic("nil peer")
@@ -140,8 +128,6 @@ func (p *peerMgr) onSucceedAdvertise(addr string, header *pb.BlockHeader) {
 }
 
 func (p *peerMgr) goForEachAlivePeer(f func(addr string)) {
-	p.mtx.RLock()
-	defer p.mtx.RUnlock()
 	for _, peer := range p.peers {
 		if !peer.isDead {
 			go f(peer.addr)

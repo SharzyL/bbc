@@ -22,3 +22,4 @@ const expectedMiningTime = 10 * time.Second
 
 // general rpc config
 const rpcTimeout = 3 * time.Second
+const longRpcTimeout = 15 * time.Second

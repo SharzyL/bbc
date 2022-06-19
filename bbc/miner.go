@@ -114,7 +114,7 @@ func NewMiner(opts *MinerOptions) *Miner {
 	miner.rpcHandler.l = &miner
 
 	for _, peerAddr := range opts.PeerAddrList {
-		miner.peerMgr.addPeer(peerAddr)
+		miner.peerMgr.addPeer(peerAddr) // at initialization, no need to lock
 	}
 
 	logger.Infow("add miner pubkey", zap.String("hash", b2str(opts.PubKey)))
@@ -134,9 +134,11 @@ func (l *Miner) MainLoop() {
 	for {
 		newBlock := l.createBlock()
 		if newBlock != nil {
+			l.peerMgr.mtx.RLock()
 			l.peerMgr.goForEachAlivePeer(func(p string) {
 				l.sendAdvertisement(newBlock.Block.Header, p)
 			})
+			l.peerMgr.mtx.RUnlock()
 		}
 	}
 }
@@ -197,9 +199,11 @@ func (l *Miner) serveLoop() {
 func (l *Miner) advertiseLoop() {
 	// first advertise genesis block, to attract their own advertisement
 	l.chainMtx.RLock()
+	l.peerMgr.mtx.RLock()
 	l.peerMgr.goForEachAlivePeer(func(p string) {
 		go l.sendAdvertisement(l.mainChain[0].Block.Header, p)
 	})
+	l.peerMgr.mtx.RUnlock()
 	l.chainMtx.RUnlock()
 
 	time.Sleep(advertiseInterval)
@@ -208,13 +212,17 @@ func (l *Miner) advertiseLoop() {
 		headerToAdvertise := l.mainChain[len(l.mainChain)-1].Block.Header
 		l.chainMtx.RUnlock()
 
+		l.peerMgr.mtx.RLock()
 		peerAddr := l.peerMgr.getNextToAdvertise(headerToAdvertise)
+		l.peerMgr.mtx.RUnlock()
 
 		// advertise new block to peers
 		if peerAddr != nil {
 			go l.sendAdvertisement(headerToAdvertise, peerAddr.addr)
 			// here we call onStartAdvertise to force update lastTryAdvertise timestamp
+			l.peerMgr.mtx.Lock()
 			l.peerMgr.onStartAdvertise(peerAddr.addr)
+			l.peerMgr.mtx.Unlock()
 		} else {
 			time.Sleep(advertiseInterval)
 		}
@@ -222,15 +230,19 @@ func (l *Miner) advertiseLoop() {
 }
 
 func (l *Miner) sendAdvertisement(header *pb.BlockHeader, addr string) {
+	l.peerMgr.mtx.Lock()
 	l.peerMgr.onStartAdvertise(addr)
+	l.peerMgr.mtx.Unlock()
 
 	// connect to peer
 	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
-	defer cancel()
 	conn, err := grpc.DialContext(ctx, addr, grpc.WithInsecure(), grpc.WithBlock())
+	cancel()
 	if err != nil {
 		l.logger.Warnw("failed to dial peer", zap.String("peerAddr", addr), zap.Error(err))
+		l.peerMgr.mtx.Lock()
 		l.peerMgr.onFailedAdvertise(addr)
+		l.peerMgr.mtx.Unlock()
 		return
 	}
 	defer conn.Close()
@@ -248,20 +260,22 @@ func (l *Miner) sendAdvertisement(header *pb.BlockHeader, addr string) {
 	l.peerMgr.mtx.RUnlock()
 
 	// send advertisement
-	ctx, cancel = context.WithTimeout(context.Background(), rpcTimeout)
-	defer cancel()
 	l.logger.Debugw("advertise block to peer",
 		zap.Int64("height", header.Height),
 		zap.String("hash", b2str(Hash(header))),
 		zap.String("peer", addr))
+	ctx, cancel = context.WithTimeout(context.Background(), rpcTimeout)
 	ans, err := client.AdvertiseBlock(ctx, &pb.AdvertiseBlockReq{
 		Header: header,
 		Addr:   l.SelfAddr,
 		Peers:  peers,
 	})
+	cancel()
 	if err != nil {
 		l.logger.Errorw("fail to advertise block to peer", zap.Error(err), zap.String("peerAddr", addr))
+		l.peerMgr.mtx.Lock()
 		l.peerMgr.onFailedAdvertise(addr)
+		l.peerMgr.mtx.Unlock()
 		return
 	} else {
 		l.logger.Debugw("advertise block to peer successful",
@@ -271,7 +285,9 @@ func (l *Miner) sendAdvertisement(header *pb.BlockHeader, addr string) {
 		if ans.Header.Height > header.Height {
 			go l.syncBlock(addr, ans.Header)
 		}
+		l.peerMgr.mtx.Lock()
 		l.peerMgr.onSucceedAdvertise(addr, ans.Header)
+		l.peerMgr.mtx.Unlock()
 	}
 }
 
@@ -403,8 +419,11 @@ findMaxSynced:
 	for i := len(hashesToSync) - 1; i >= 0; i-- {
 		hash := hashesToSync[i]
 		fullBlock := l.findBlockByHash(hash)
+		// TODO: parallelize this
 		if fullBlock == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), longRpcTimeout)
 			fullBlock, err = client.GetFullBlock(ctx, pb.NewHashVal(hash))
+			cancel()
 			if err != nil {
 				l.logger.Errorw("fail to GetFullBlock when syncing",
 					zap.Error(err),
@@ -643,7 +662,7 @@ func (l *Miner) getDifficulty(chain []*fullBlockWithHash, height int64) uint64 {
 	// the difficulty is set that according to the difficulty of the last k blocks,
 	// the next block should be mined out every [exp, 2 * exp) second
 	// TODO: add timestamp check when creating new block
-	if height <= 2 {
+	if height <= miningDifficultyBlocks {
 		return defaultMiningDifficulty
 	}
 	k := minInt64(height-1, miningDifficultyBlocks) // starting from block 1

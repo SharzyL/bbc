@@ -106,6 +106,13 @@ func (s *minerRpcHandler) PeekChainByHeight(ctx context.Context, req *pb.PeekCha
 
 func (s *minerRpcHandler) AdvertiseBlock(ctx context.Context, req *pb.AdvertiseBlockReq) (ans *pb.AdvertiseBlockAns, err error) {
 	l := s.l
+
+	startT := time.Now()
+	defer func() {
+		dur := time.Now().Sub(startT)
+		l.logger.Debugw("handle AdvertiseBlock ok", zap.Duration("dur", dur))
+	}()
+
 	header := req.Header
 	l.chainMtx.RLock()
 	mainChainHeight := int64(len(l.mainChain)) - 1
@@ -118,7 +125,9 @@ func (s *minerRpcHandler) AdvertiseBlock(ctx context.Context, req *pb.AdvertiseB
 		zap.Int64("selfH", mainChainHeight),
 		zap.String("hashH", b2str(Hash(header))))
 
+	l.peerMgr.mtx.Lock()
 	l.peerMgr.onRecvAdvertise(req.Addr, header)
+	l.peerMgr.mtx.Unlock()
 
 	if header.Height > mainChainHeight {
 		go l.syncBlock(req.Addr, header)
