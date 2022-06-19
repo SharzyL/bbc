@@ -36,7 +36,7 @@ func (t *Trie) Search(val []byte) interface{} {
 
 	n := t.root
 	for _, b := range val {
-		n = n.children[b]
+		n = n.children[b] // n.children must not be nil, because n.key == nil or n is root
 		if n == nil {
 			return nil
 		}
@@ -57,18 +57,20 @@ func (t *Trie) Insert(val []byte, data interface{}) {
 
 	n := t.root
 	for i, b := range val {
-		newNode := n.children[b]
-		if newNode == nil {
+		newNode := n.children[b] // again, n.children must not be nil
+		if newNode == nil {      // take a new path from n
 			n.children[b] = &trieNode{
 				data:     data,
-				children: make(map[byte]*trieNode),
+				children: nil,
 				key:      val,
 			}
 			return
 		}
 		n = newNode
-		if n.key != nil {
+		if n.key != nil { // if reaching a leaf node (notice that all key is of same length)
 			nKey := n.key
+
+			// the key already exists
 			if bytes.Equal(nKey, val) {
 				n.data = data
 				return
@@ -76,6 +78,9 @@ func (t *Trie) Insert(val []byte, data interface{}) {
 			nData := n.data
 			n.key = nil
 			n.data = nil
+			n.children = make(map[byte]*trieNode)
+
+			// try growth the path, until a fork appears
 			for j := i + 1; j < len(val); j++ {
 				if nKey[j] == val[j] {
 					n.children[val[j]] = &trieNode{
@@ -85,14 +90,15 @@ func (t *Trie) Insert(val []byte, data interface{}) {
 					}
 					n = n.children[val[j]]
 				} else {
+					// reach the fork point
 					n.children[val[j]] = &trieNode{
 						data:     data,
-						children: make(map[byte]*trieNode),
+						children: nil,
 						key:      val,
 					}
 					n.children[nKey[j]] = &trieNode{
 						data:     nData,
-						children: make(map[byte]*trieNode),
+						children: nil,
 						key:      nKey,
 					}
 					return
@@ -100,5 +106,27 @@ func (t *Trie) Insert(val []byte, data interface{}) {
 			}
 			panic("unreachable")
 		}
+	}
+}
+
+func (t *Trie) Delete(val []byte) {
+	t.mtx.Lock()
+	defer t.mtx.Unlock()
+
+	n := t.root
+	for _, b := range val {
+		c := n.children[b] // n.children must not be nil, because n.key == nil or n is root
+		if c == nil {
+			return
+		}
+		if c.key != nil {
+			if bytes.Equal(c.key, val) {
+				delete(n.children, b)
+				return
+			} else {
+				return
+			}
+		}
+		n = c
 	}
 }

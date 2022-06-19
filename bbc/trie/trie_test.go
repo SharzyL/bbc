@@ -37,3 +37,42 @@ func BenchmarkVerify(b *testing.B) {
 		ed25519.Verify(pubKey, msg, sig)
 	}
 }
+
+func BenchmarkMapTrie(b *testing.B) {
+	n := 1000000
+	for i := 0; i < b.N; i++ {
+		t := NewTrie()
+		key := make([]byte, 64)
+		for j := 0; j < n; j++ {
+			rand.Read(key)
+			t.Insert(key, 0)
+		}
+		for j := 0; j < n; j++ {
+			rand.Read(key)
+			t.Search(key)
+		}
+	}
+}
+
+func BenchmarkMapNative(b *testing.B) {
+	n := 1000000
+	for i := 0; i < b.N; i++ {
+		t := make(map[string]int)
+		key := make([]byte, 64)
+		for j := 0; j < n; j++ {
+			rand.Read(key)
+			t[string(key)] = 0
+		}
+		for j := 0; j < n; j++ {
+			rand.Read(key)
+			_ = t[string(key)]
+		}
+	}
+}
+
+func BenchmarkByteMap(b *testing.B) {
+	t := make(map[byte]int)
+	for i := 0; i < b.N; i++ {
+		t[byte(i)] = 0
+	}
+}
