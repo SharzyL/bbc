@@ -332,7 +332,8 @@ func (l *Miner) syncBlock(addr string, topHeader *pb.BlockHeader) {
 	// connecting to peer
 	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
 	defer cancel()
-	conn, err := grpc.DialContext(ctx, addr, grpc.WithInsecure(), grpc.WithBlock())
+	conn, err := grpc.DialContext(ctx, addr, grpc.WithInsecure(), grpc.WithBlock(),
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(200*1024*1024)))
 	if err != nil {
 		l.logger.Errorw("fail to dial when syncing block", zap.Error(err), zap.String("peerAddr", addr))
 		return

@@ -17,7 +17,7 @@ import (
 	"github.com/SharzyL/bbc/bbc/pb"
 )
 
-const rpcTimeout = 1 * time.Second
+const rpcTimeout = 3 * time.Second
 
 type Wallet struct {
 	PubKey  []byte
@@ -85,7 +85,8 @@ func NewWallet(conf *WalletConfig, server string) *Wallet {
 func (w *Wallet) ConnectOne() {
 	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
 	defer cancel()
-	conn, err := grpc.DialContext(ctx, w.DefaultServer, grpc.WithInsecure(), grpc.WithBlock())
+	conn, err := grpc.DialContext(ctx, w.DefaultServer, grpc.WithInsecure(), grpc.WithBlock(),
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(200*1024*1024))) // 200MB block at most
 	if err != nil {
 		log.Panicf("cannot dial %s: %v", w.Miners[0], err)
 	}
