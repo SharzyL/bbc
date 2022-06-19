@@ -29,8 +29,6 @@ type Wallet struct {
 
 	Conns   []*grpc.ClientConn
 	Clients []pb.MinerClient
-
-	UtxoList []*pb.Utxo
 }
 
 type WalletConfig struct {
@@ -78,7 +76,6 @@ func NewWallet(conf *WalletConfig, server string) *Wallet {
 		Addr:          addr,
 		Conns:         []*grpc.ClientConn{},
 		Clients:       []pb.MinerClient{},
-		UtxoList:      []*pb.Utxo{},
 	}
 }
 
@@ -126,14 +123,17 @@ func (w *Wallet) Close() {
 	}
 }
 
-func (w *Wallet) GetUtxo() {
+func (w *Wallet) GetUtxo(pubKey []byte) []*pb.Utxo {
+	if pubKey == nil {
+		pubKey = w.PubKey
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
 	defer cancel()
-	lookupAns, err := w.Clients[0].LookupUtxo(ctx, &pb.PubKey{Bytes: w.PubKey})
+	lookupAns, err := w.Clients[0].LookupUtxo(ctx, &pb.PubKey{Bytes: pubKey})
 	if err != nil {
 		log.Fatalf("cannot lookup utxo: %v", err)
 	}
-	w.UtxoList = lookupAns.UtxoList
+	return lookupAns.UtxoList
 }
 
 func (w *Wallet) CmdStatus() {
@@ -183,12 +183,20 @@ func (w *Wallet) CmdChain(height int64) {
 	bbc.PrintBlock(block, 0, os.Stdout)
 }
 
-func (w *Wallet) CmdBalance(showUtxo bool) {
+func (w *Wallet) CmdBalance(showUtxo bool, addr string) {
 	w.ConnectOne()
-	w.GetUtxo()
-	fmt.Printf("pubkey: %x\n", w.PubKey)
+	pubKey, found := w.Addr[addr]
+	if !found {
+		parsedAddr, err := hex.DecodeString(addr)
+		if err != nil {
+			log.Fatalf("cannot parse toAddr '%s': %v", addr, err)
+		}
+		pubKey = parsedAddr
+	}
+	utxoList := w.GetUtxo(pubKey)
+	fmt.Printf("pubkey: %x\n", pubKey)
 	balance := uint64(0)
-	for i, utxo := range w.UtxoList {
+	for i, utxo := range utxoList {
 		if showUtxo {
 			fmt.Printf("Utxo %d:\n", i)
 			bbc.PrintUtxo(utxo, 2, os.Stdout)
@@ -200,7 +208,7 @@ func (w *Wallet) CmdBalance(showUtxo bool) {
 
 func (w *Wallet) CmdTransfer(toAddr string, value uint64, fee uint64, nowait bool) {
 	w.ConnectAll()
-	w.GetUtxo()
+	utxoList := w.GetUtxo(nil)
 	addr, found := w.Addr[toAddr]
 	if !found {
 		parsedAddr, err := hex.DecodeString(toAddr)
@@ -214,7 +222,7 @@ func (w *Wallet) CmdTransfer(toAddr string, value uint64, fee uint64, nowait boo
 	var txOutList []*pb.TxOut
 	inputValue := value + fee
 	totalUtxoValue := uint64(0)
-	for _, utxo := range w.UtxoList {
+	for _, utxo := range utxoList {
 		totalUtxoValue += utxo.Value
 		txIn := &pb.TxIn{
 			PrevTx:     utxo.TxHash,
@@ -297,7 +305,8 @@ type walletArgs struct {
 		Height int64 `short:"l" default:"-1"`
 	} `cmd:"" help:"inspect main chain on server"`
 	Balance struct {
-		Utxo bool `short:"u" help:"print utxo list"`
+		Utxo bool   `short:"u" help:"print utxo list"`
+		Addr string `short:"a" help:"addr of account"`
 	} `cmd:"" help:"query balance"`
 	Transfer struct {
 		To     string `short:"t" required:"true" help:"the name or addr of recipient"`
@@ -337,7 +346,7 @@ func main() {
 	case "chain":
 		wallet.CmdChain(args.Chain.Height)
 	case "balance":
-		wallet.CmdBalance(args.Balance.Utxo)
+		wallet.CmdBalance(args.Balance.Utxo, args.Balance.Addr)
 	case "transfer <value>":
 		wallet.CmdTransfer(args.Transfer.To, args.Transfer.Value, args.Transfer.Fee, args.Transfer.Nowait)
 	default:
