@@ -14,10 +14,12 @@ type peerInfo struct {
 	lastRecvAdvTime   time.Time // zero value means not advertised yet
 	lastRecvAdvHeader *pb.BlockHeader
 
-	lastSucAdvTime     time.Time // zero value means not sending advertised yet
-	lastTryAdvTime     time.Time // same
+	lastSucAdvTime time.Time // zero value means not sending advertised yet
+
+	lastTryAdvTime   time.Time // same
+	lastTryAdvHeader *pb.BlockHeader
+
 	firstFailedAdvTime time.Time // the first failed advertise since last success
-	lastSucAdvHeader   *pb.BlockHeader
 
 	isDead bool // by default a peer is alive
 }
@@ -59,12 +61,12 @@ func (p *peerMgr) getNextToAdvertise(header *pb.BlockHeader) *peerInfo {
 		}
 
 		// if the peer is advertised recently with same block, ignore it
-		if time.Now().Sub(peer.lastTryAdvTime) < advertiseInterval && bytes.Equal(Hash(header), Hash(peer.lastSucAdvHeader)) {
+		if time.Now().Sub(peer.lastTryAdvTime) < advertiseInterval && bytes.Equal(Hash(header), Hash(peer.lastTryAdvHeader)) {
 			continue
 		}
 
 		// if peer is not lower, ignore it
-		if !peer.lastRecvAdvTime.IsZero() && peer.lastSucAdvHeader.Height >= header.Height {
+		if !peer.lastRecvAdvTime.IsZero() && peer.lastRecvAdvHeader.Height >= header.Height {
 			continue
 		}
 
@@ -95,11 +97,12 @@ func (p *peerMgr) onRecvAdvertise(addr string, header *pb.BlockHeader) *peerInfo
 	return peer
 }
 
-func (p *peerMgr) onStartAdvertise(addr string) {
+func (p *peerMgr) onStartAdvertise(addr string, header *pb.BlockHeader) {
 	peer := p.peers[addr]
 	if peer == nil {
 		panic("nil peer")
 	}
+	peer.lastTryAdvHeader = header
 	peer.lastTryAdvTime = time.Now()
 }
 
@@ -119,14 +122,13 @@ func (p *peerMgr) onFailedAdvertise(addr string) {
 	}
 }
 
-func (p *peerMgr) onSucceedAdvertise(addr string, sendHeader *pb.BlockHeader, recvHeader *pb.BlockHeader) {
+func (p *peerMgr) onSucceedAdvertise(addr string, recvHeader *pb.BlockHeader) {
 	peer := p.peers[addr]
 	if peer == nil {
 		panic("nil peer")
 	}
 	now := time.Now()
 	peer.lastSucAdvTime = now
-	peer.lastSucAdvHeader = sendHeader
 	peer.lastRecvAdvHeader = recvHeader
 	peer.isDead = false
 	peer.firstFailedAdvTime = time.Time{}

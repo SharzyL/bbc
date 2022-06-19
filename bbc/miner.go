@@ -30,8 +30,9 @@ type Miner struct {
 
 	mainChain []*fullBlockWithHash
 
-	hashToTx    *trie.Trie // stores *txWithConsumer
-	hashToBlock *trie.Trie // stores *pb.FullBlock
+	hashToTx     *trie.Trie // stores *txWithConsumer
+	hashToBlock  *trie.Trie // stores *pb.FullBlock
+	pubKeyToUtxo *trie.Trie // stores []*utxoRecord
 
 	memPool []*txWithFee // transactions waiting to be packed into a block
 
@@ -93,8 +94,9 @@ func NewMiner(opts *MinerOptions) *Miner {
 
 		mainChain: make([]*fullBlockWithHash, 0, 1), // reserve space for genesis block
 
-		hashToTx:    trie.NewTrie(),
-		hashToBlock: trie.NewTrie(),
+		hashToTx:     trie.NewTrie(),
+		hashToBlock:  trie.NewTrie(),
+		pubKeyToUtxo: trie.NewTrie(),
 
 		memPool: make([]*txWithFee, 0, 1000),
 
@@ -218,11 +220,12 @@ func (l *Miner) advertiseLoop() {
 
 		// advertise new block to peers
 		if peerAddr != nil {
-			go l.sendAdvertisement(headerToAdvertise, peerAddr.addr)
-			// here we call onStartAdvertise to force update lastTryAdvTime timestamp
+			// here we call onStartAdvertise to force update lastTryAdvTime and lastTryAdvHeader
 			l.peerMgr.mtx.Lock()
-			l.peerMgr.onStartAdvertise(peerAddr.addr)
+			l.peerMgr.onStartAdvertise(peerAddr.addr, headerToAdvertise)
 			l.peerMgr.mtx.Unlock()
+
+			go l.sendAdvertisement(headerToAdvertise, peerAddr.addr)
 		} else {
 			time.Sleep(advertiseInterval)
 		}
@@ -231,7 +234,7 @@ func (l *Miner) advertiseLoop() {
 
 func (l *Miner) sendAdvertisement(header *pb.BlockHeader, addr string) {
 	l.peerMgr.mtx.Lock()
-	l.peerMgr.onStartAdvertise(addr)
+	l.peerMgr.onStartAdvertise(addr, header)
 	l.peerMgr.mtx.Unlock()
 
 	// connect to peer
@@ -286,7 +289,7 @@ func (l *Miner) sendAdvertisement(header *pb.BlockHeader, addr string) {
 			go l.syncBlock(addr, ans.Header)
 		}
 		l.peerMgr.mtx.Lock()
-		l.peerMgr.onSucceedAdvertise(addr, header, ans.Header)
+		l.peerMgr.onSucceedAdvertise(addr, header)
 		l.peerMgr.mtx.Unlock()
 	}
 }
@@ -498,11 +501,15 @@ findMaxSynced:
 }
 
 func (l *Miner) updateTxInfo(fullBlock *fullBlockWithHash) {
+	// NOTE: it is co-locked with chainMtx
+
 	// insert all tx to hashToTx
 	// update consumers of previous tx
+	// update pubKeyToUtxo
 	for _, tx := range fullBlock.Block.TxList {
 		if tx.Valid {
-			l.hashToTx.Insert(Hash(tx), makeTxWithConsumer(tx, fullBlock))
+			txw := makeTxWithConsumer(tx, fullBlock)
+			l.hashToTx.Insert(Hash(tx), txw)
 			for _, txIn := range tx.TxInList {
 				prevTx := l.findTxByHash(txIn.PrevTx.Bytes)
 				if txIn.PrevOutIdx >= uint32(len(prevTx.Tx.TxOutList)) {
@@ -510,6 +517,21 @@ func (l *Miner) updateTxInfo(fullBlock *fullBlockWithHash) {
 					return
 				}
 				prevTx.Consumers[txIn.PrevOutIdx] = fullBlock
+			}
+
+			for i, txOut := range tx.TxOutList {
+				pubKey := txOut.ReceiverPubKey.Bytes
+				utxoListUnconverted := l.pubKeyToUtxo.Search(pubKey) // stupid golang
+				if utxoListUnconverted == nil {
+					utxoListUnconverted = make([]*utxoRecord, 0, 1)
+				}
+				utxoList := utxoListUnconverted.([]*utxoRecord)
+
+				utxoList = append(utxoList, &utxoRecord{
+					Txw:      txw,
+					TxOutIdx: uint32(i),
+				})
+				l.pubKeyToUtxo.Insert(pubKey, utxoList)
 			}
 		}
 	}

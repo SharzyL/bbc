@@ -222,31 +222,33 @@ func (s *minerRpcHandler) UploadTx(ctx context.Context, tx *pb.Tx) (*pb.UploadTx
 
 func (s *minerRpcHandler) LookupUtxo(ctx context.Context, pubKey *pb.PubKey) (*pb.LookupUtxoAns, error) {
 	l := s.l
+	l.logger.Debugw("receive LookupUtxo request", zap.String("pubKey", b2str(pubKey.Bytes)))
+
+	startT := time.Now()
+	defer func() {
+		dur := time.Now().Sub(startT)
+		l.logger.Debugw("handle LookupUtxo ok", zap.Duration("dur", dur))
+	}()
+
 	if pubKey == nil || len(pubKey.Bytes) != PubKeyLen {
-		return nil, fmt.Errorf("invalid pubkey")
+		return nil, fmt.Errorf("invalid pubkey '%x'", pubKey.Bytes)
 	}
 	l.chainMtx.RLock()
-	chain := l.mainChain
 	defer l.chainMtx.RUnlock()
 
 	var utxoList []*pb.Utxo
-	for _, b := range chain {
-		for _, tx := range b.Block.TxList {
-			if !tx.Valid {
-				continue
-			}
-			txHash := Hash(tx)
-			txw := l.findTxByHash(txHash)
-
-			for i, txOut := range tx.TxOutList {
-				if err := l.isTxOutSpent(txw, uint32(i)); err == nil && bytes.Equal(pubKey.Bytes, txOut.ReceiverPubKey.Bytes) {
-					utxoList = append(utxoList, &pb.Utxo{
-						Value:    txOut.Value,
-						TxHash:   pb.NewHashVal(txHash),
-						TxOutIdx: uint32(i),
-						PubKey:   txOut.ReceiverPubKey,
-					})
-				}
+	var rawUtxoListUnconverted = l.pubKeyToUtxo.Search(pubKey.Bytes)
+	if rawUtxoListUnconverted != nil {
+		rawUtxoList := rawUtxoListUnconverted.([]*utxoRecord)
+		for _, utxo := range rawUtxoList {
+			if err := l.isTxOutSpent(utxo.Txw, utxo.TxOutIdx); err == nil {
+				tx := utxo.Txw.Tx
+				utxoList = append(utxoList, &pb.Utxo{
+					Value:    tx.TxOutList[utxo.TxOutIdx].Value,
+					TxHash:   pb.NewHashVal(Hash(tx)),
+					TxOutIdx: utxo.TxOutIdx,
+					PubKey:   pubKey,
+				})
 			}
 		}
 	}

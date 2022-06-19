@@ -50,15 +50,20 @@ func makeFullBlockWithHash(b *pb.FullBlock) *fullBlockWithHash {
 	}
 }
 
-type txWithFee = struct {
+type utxoRecord struct {
+	Txw      *txWithConsumer
+	TxOutIdx uint32
+}
+
+type txWithFee struct {
 	Tx  *pb.Tx
 	Fee uint64
 }
 
-type txWithConsumer = struct {
+type txWithConsumer struct {
 	Tx        *pb.Tx
-	Block     *fullBlockWithHash // might be nil, thus not packed to a block
-	Consumers []*fullBlockWithHash
+	Block     *fullBlockWithHash   // might be nil, thus not packed to a block
+	Consumers []*fullBlockWithHash // the consumer block of the i-th txOut
 }
 
 func makeTxWithConsumer(tx *pb.Tx, block *fullBlockWithHash) *txWithConsumer {

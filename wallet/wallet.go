@@ -183,18 +183,27 @@ func (w *Wallet) CmdChain(height int64) {
 	bbc.PrintBlock(block, 0, os.Stdout)
 }
 
-func (w *Wallet) CmdBalance(showUtxo bool, addr string) {
+func (w *Wallet) CmdBalance(showUtxo bool, account string) {
 	w.ConnectOne()
-	pubKey, found := w.Addr[addr]
-	if !found {
-		parsedAddr, err := hex.DecodeString(addr)
-		if err != nil {
-			log.Fatalf("cannot parse toAddr '%s': %v", addr, err)
+	var pubKey []byte
+	if len(account) == 0 {
+		pubKey = w.PubKey
+	} else {
+		pubKey = w.Addr[account]
+		if pubKey == nil { // when not finding acount as known accounts, parse it as hex string
+			if len(account) != bbc.PubKeyLen {
+				log.Fatalf("incorret pubkey length (expected %d, actual %d)", bbc.PubKeyLen, len(pubKey))
+			}
+			var err error
+			pubKey, err = hex.DecodeString(account)
+			if err != nil {
+				log.Fatalf("cannot parse toAddr '%s': %v", account, err)
+			}
 		}
-		pubKey = parsedAddr
 	}
-	utxoList := w.GetUtxo(pubKey)
+
 	fmt.Printf("pubkey: %x\n", pubKey)
+	utxoList := w.GetUtxo(pubKey)
 	balance := uint64(0)
 	for i, utxo := range utxoList {
 		if showUtxo {
@@ -305,8 +314,8 @@ type walletArgs struct {
 		Height int64 `short:"l" default:"-1"`
 	} `cmd:"" help:"inspect main chain on server"`
 	Balance struct {
-		Utxo bool   `short:"u" help:"print utxo list"`
-		Addr string `short:"a" help:"addr of account"`
+		Utxo    bool   `short:"u" help:"print utxo list"`
+		Account string `short:"a" help:"addr of account"`
 	} `cmd:"" help:"query balance"`
 	Transfer struct {
 		To     string `short:"t" required:"true" help:"the name or addr of recipient"`
@@ -346,7 +355,7 @@ func main() {
 	case "chain":
 		wallet.CmdChain(args.Chain.Height)
 	case "balance":
-		wallet.CmdBalance(args.Balance.Utxo, args.Balance.Addr)
+		wallet.CmdBalance(args.Balance.Utxo, args.Balance.Account)
 	case "transfer <value>":
 		wallet.CmdTransfer(args.Transfer.To, args.Transfer.Value, args.Transfer.Fee, args.Transfer.Nowait)
 	default:
