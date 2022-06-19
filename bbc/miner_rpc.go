@@ -37,9 +37,9 @@ func (s *minerRpcHandler) GetStatus(context.Context, *pb.GetStatusReq) (*pb.GetS
 	_, _ = fmt.Fprintf(sb, "\nConnected to %d peers\n", len(l.peerMgr.peers))
 	for addr, peer := range l.peerMgr.peers {
 		_, _ = fmt.Fprintf(sb, " - %s (isDead: %v) (h: %d) (lastAdv: %s (failed: %v))\n",
-			addr, peer.isDead, peer.lastRecvAdvertiseHeight,
-			compactTime(peer.lastTryAdvertise),
-			!peer.firstFailedAdvertise.IsZero())
+			addr, peer.isDead, peer.lastRecvAdvHeader.Height,
+			compactTime(peer.lastTryAdvTime),
+			!peer.firstFailedAdvTime.IsZero())
 	}
 	l.peerMgr.mtx.RUnlock()
 

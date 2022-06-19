@@ -219,7 +219,7 @@ func (l *Miner) advertiseLoop() {
 		// advertise new block to peers
 		if peerAddr != nil {
 			go l.sendAdvertisement(headerToAdvertise, peerAddr.addr)
-			// here we call onStartAdvertise to force update lastTryAdvertise timestamp
+			// here we call onStartAdvertise to force update lastTryAdvTime timestamp
 			l.peerMgr.mtx.Lock()
 			l.peerMgr.onStartAdvertise(peerAddr.addr)
 			l.peerMgr.mtx.Unlock()
@@ -286,7 +286,7 @@ func (l *Miner) sendAdvertisement(header *pb.BlockHeader, addr string) {
 			go l.syncBlock(addr, ans.Header)
 		}
 		l.peerMgr.mtx.Lock()
-		l.peerMgr.onSucceedAdvertise(addr, ans.Header)
+		l.peerMgr.onSucceedAdvertise(addr, header, ans.Header)
 		l.peerMgr.mtx.Unlock()
 	}
 }

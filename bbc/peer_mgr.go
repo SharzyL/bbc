@@ -1,6 +1,7 @@
 package bbc
 
 import (
+	"bytes"
 	"github.com/SharzyL/bbc/bbc/pb"
 	"go.uber.org/zap"
 	"sync"
@@ -10,13 +11,13 @@ import (
 type peerInfo struct {
 	addr string
 
-	lastRecvAdvertise       time.Time // zero value means not advertised yet
-	lastRecvAdvertiseHeight int64
+	lastRecvAdvTime   time.Time // zero value means not advertised yet
+	lastRecvAdvHeader *pb.BlockHeader
 
-	lastSucAdvertise       time.Time // zero value means not sending advertised yet
-	lastTryAdvertise       time.Time // same
-	firstFailedAdvertise   time.Time // the first failed advertise since last success
-	lastSucAdvertiseHeight int64
+	lastSucAdvTime     time.Time // zero value means not sending advertised yet
+	lastTryAdvTime     time.Time // same
+	firstFailedAdvTime time.Time // the first failed advertise since last success
+	lastSucAdvHeader   *pb.BlockHeader
 
 	isDead bool // by default a peer is alive
 }
@@ -46,27 +47,30 @@ func (p *peerMgr) getNextToAdvertise(header *pb.BlockHeader) *peerInfo {
 	var peerToAdvertise *peerInfo
 
 	for _, peer := range p.peers {
+		// ignore dead node
 		if peer.isDead {
 			continue
 		}
 
-		if time.Now().Sub(peer.lastTryAdvertise) < advertiseInterval {
-			continue
-		}
-
-		if !peer.lastRecvAdvertise.IsZero() && peer.lastRecvAdvertiseHeight >= header.Height {
-			// if peer is not lower
-			continue
-		}
-
 		// if a peer is not advertised yet, advertise it
-		if peer.lastTryAdvertise.IsZero() {
+		if peer.lastTryAdvTime.IsZero() {
 			peerToAdvertise = peer
 			break
 		}
 
-		if minTryAdvTime.IsZero() || minTryAdvTime.After(peer.lastTryAdvertise) {
-			minTryAdvTime = peer.lastTryAdvertise
+		// if the peer is advertised recently with same block, ignore it
+		if time.Now().Sub(peer.lastTryAdvTime) < advertiseInterval && bytes.Equal(Hash(header), Hash(peer.lastSucAdvHeader)) {
+			continue
+		}
+
+		// if peer is not lower, ignore it
+		if !peer.lastRecvAdvTime.IsZero() && peer.lastSucAdvHeader.Height >= header.Height {
+			continue
+		}
+
+		// otherwise, consider this peer
+		if minTryAdvTime.IsZero() || minTryAdvTime.After(peer.lastTryAdvTime) {
+			minTryAdvTime = peer.lastTryAdvTime
 			peerToAdvertise = peer
 		}
 	}
@@ -85,8 +89,8 @@ func (p *peerMgr) onRecvAdvertise(addr string, header *pb.BlockHeader) *peerInfo
 		p.peers[addr] = peer
 	}
 	now := time.Now()
-	peer.lastRecvAdvertise = now
-	peer.lastRecvAdvertiseHeight = header.Height
+	peer.lastRecvAdvTime = now
+	peer.lastRecvAdvHeader = header
 	peer.isDead = false
 	return peer
 }
@@ -96,7 +100,7 @@ func (p *peerMgr) onStartAdvertise(addr string) {
 	if peer == nil {
 		panic("nil peer")
 	}
-	peer.lastTryAdvertise = time.Now()
+	peer.lastTryAdvTime = time.Now()
 }
 
 func (p *peerMgr) onFailedAdvertise(addr string) {
@@ -105,26 +109,27 @@ func (p *peerMgr) onFailedAdvertise(addr string) {
 		panic("nil peer")
 	}
 	now := time.Now()
-	if peer.lastTryAdvertise.IsZero() || peer.firstFailedAdvertise.IsZero() {
+	if peer.lastTryAdvTime.IsZero() || peer.firstFailedAdvTime.IsZero() {
 		// if not have sent advertise, or last advertise is success
-		peer.firstFailedAdvertise = now
+		peer.firstFailedAdvTime = now
 	}
-	if now.Sub(peer.firstFailedAdvertise) > peerDeadTimeout && !peer.isDead {
+	if now.Sub(peer.firstFailedAdvTime) > peerDeadTimeout && !peer.isDead {
 		peer.isDead = true
-		p.logger.Warnw("peer is dead", zap.String("addr", addr), zap.Time("firstFailed", peer.firstFailedAdvertise))
+		p.logger.Warnw("peer is dead", zap.String("addr", addr), zap.Time("firstFailed", peer.firstFailedAdvTime))
 	}
 }
 
-func (p *peerMgr) onSucceedAdvertise(addr string, header *pb.BlockHeader) {
+func (p *peerMgr) onSucceedAdvertise(addr string, sendHeader *pb.BlockHeader, recvHeader *pb.BlockHeader) {
 	peer := p.peers[addr]
 	if peer == nil {
 		panic("nil peer")
 	}
 	now := time.Now()
-	peer.lastSucAdvertise = now
-	peer.lastRecvAdvertiseHeight = header.Height
+	peer.lastSucAdvTime = now
+	peer.lastSucAdvHeader = sendHeader
+	peer.lastRecvAdvHeader = recvHeader
 	peer.isDead = false
-	peer.firstFailedAdvertise = time.Time{}
+	peer.firstFailedAdvTime = time.Time{}
 }
 
 func (p *peerMgr) goForEachAlivePeer(f func(addr string)) {
