@@ -18,9 +18,9 @@ const rpcTimeout = 1 * time.Second
 
 func main() {
 	var opts struct {
-		Miner       string `short:"m" long:"miner" required:"true"`
-		NumWorks    int    `short:"n" default:"1000"`
-		Concurrency int    `short:"c" default:"20"`
+		Miners      []string `short:"m" long:"miner"`
+		NumWorks    int      `short:"n" default:"1000"`
+		Concurrency int      `short:"c" default:"20"`
 	}
 	_, err := flags.Parse(&opts)
 	if err != nil {
@@ -40,24 +40,24 @@ func main() {
 
 	startTime := time.Now()
 
+	clients := make([]pb.MinerClient, 0, len(opts.Miners))
+	for _, miner := range opts.Miners {
+		ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
+		conn, err := grpc.DialContext(ctx, miner, grpc.WithInsecure(), grpc.WithBlock())
+		cancel()
+		if err != nil {
+			log.Panicf("failed to dial peer: %v", err)
+			return
+		}
+		clients = append(clients, pb.NewMinerClient(conn))
+	}
+
 	wg := sync.WaitGroup{}
 	wg.Add(opts.NumWorks)
-
-	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
-	defer cancel()
-	conn, err := grpc.DialContext(ctx, opts.Miner, grpc.WithInsecure(), grpc.WithBlock())
-	if err != nil {
-		log.Panicf("failed to dial peer: %v", err)
-		return
-	}
-	defer conn.Close()
-
-	client := pb.NewMinerClient(conn)
 
 	for i := 0; i < opts.NumWorks; i++ {
 		go func(i int) {
 			defer wg.Done()
-
 			pool <- struct{}{}
 			defer func() {
 				<-pool
@@ -65,14 +65,16 @@ func main() {
 
 			log.Printf("start %d", i)
 			grStartTime := time.Now()
-			ctx, cancel = context.WithTimeout(context.Background(), rpcTimeout)
-			defer cancel()
 
-			_, err = client.UploadTx(ctx, tx)
-			if err != nil {
-				log.Panicf("fail to upload tx to server: %v", err)
+			for _, cli := range clients {
+				ctx, cancel := context.WithTimeout(context.Background(), 50*time.Second)
+				_, err := cli.UploadTx(ctx, tx)
+				cancel()
+				if err != nil {
+					log.Panicf("fail to upload tx to server: %v", err)
+				}
+				log.Printf("end %d after %d ms", i, time.Now().Sub(grStartTime).Milliseconds())
 			}
-			log.Printf("end %d after %d ms", i, time.Now().Sub(grStartTime).Milliseconds())
 		}(i)
 	}
 	wg.Wait()
