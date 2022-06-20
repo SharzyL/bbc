@@ -30,18 +30,18 @@ func NewTrie() *Trie {
 	}
 }
 
-func (t *Trie) Search(val []byte) interface{} {
+func (t *Trie) Search(key []byte) interface{} {
 	t.mtx.RLock()
 	defer t.mtx.RUnlock()
 
 	n := t.root
-	for _, b := range val {
+	for _, b := range key {
 		n = n.children[b] // n.children must not be nil, because n.key == nil or n is root
 		if n == nil {
 			return nil
 		}
 		if n.key != nil {
-			if bytes.Equal(n.key, val) {
+			if bytes.Equal(n.key, key) {
 				return n.data
 			} else {
 				return nil
@@ -51,18 +51,18 @@ func (t *Trie) Search(val []byte) interface{} {
 	return nil
 }
 
-func (t *Trie) Insert(val []byte, data interface{}) {
+func (t *Trie) Insert(key []byte, data interface{}) {
 	t.mtx.Lock()
 	defer t.mtx.Unlock()
 
 	n := t.root
-	for i, b := range val {
+	for i, b := range key {
 		newNode := n.children[b] // again, n.children must not be nil
 		if newNode == nil {      // take a new path from n
 			n.children[b] = &trieNode{
 				data:     data,
 				children: nil,
-				key:      val,
+				key:      key,
 			}
 			return
 		}
@@ -71,7 +71,7 @@ func (t *Trie) Insert(val []byte, data interface{}) {
 			nKey := n.key
 
 			// the key already exists
-			if bytes.Equal(nKey, val) {
+			if bytes.Equal(nKey, key) {
 				n.data = data
 				return
 			}
@@ -81,20 +81,20 @@ func (t *Trie) Insert(val []byte, data interface{}) {
 			n.children = make(map[byte]*trieNode)
 
 			// try growth the path, until a fork appears
-			for j := i + 1; j < len(val); j++ {
-				if nKey[j] == val[j] {
-					n.children[val[j]] = &trieNode{
+			for j := i + 1; j < len(key); j++ {
+				if nKey[j] == key[j] {
+					n.children[key[j]] = &trieNode{
 						data:     nil,
 						children: make(map[byte]*trieNode),
 						key:      nil,
 					}
-					n = n.children[val[j]]
+					n = n.children[key[j]]
 				} else {
 					// reach the fork point
-					n.children[val[j]] = &trieNode{
+					n.children[key[j]] = &trieNode{
 						data:     data,
 						children: nil,
-						key:      val,
+						key:      key,
 					}
 					n.children[nKey[j]] = &trieNode{
 						data:     nData,
@@ -109,18 +109,18 @@ func (t *Trie) Insert(val []byte, data interface{}) {
 	}
 }
 
-func (t *Trie) Delete(val []byte) {
+func (t *Trie) Delete(key []byte) {
 	t.mtx.Lock()
 	defer t.mtx.Unlock()
 
 	n := t.root
-	for _, b := range val {
+	for _, b := range key {
 		c := n.children[b] // n.children must not be nil, because n.key == nil or n is root
 		if c == nil {
 			return
 		}
 		if c.key != nil {
-			if bytes.Equal(c.key, val) {
+			if bytes.Equal(c.key, key) {
 				delete(n.children, b)
 				return
 			} else {

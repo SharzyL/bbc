@@ -28,6 +28,65 @@ func TestTrie_Simple(t *testing.T) {
 	}
 }
 
+func TestTrie_LargeRandom(t *testing.T) {
+	trie := NewTrie()
+	n := 100000
+	keyList := make([][]byte, 0, 10000)
+
+	// insert random keys
+	for i := 0; i < n; i++ {
+		var key [64]byte
+		rand.Read(key[:])
+		trie.Insert(key[:], i)
+		keyList = append(keyList, key[:])
+	}
+
+	// check Search these keys
+	for i, key := range keyList {
+		valUnconverted := trie.Search(key)
+		if valUnconverted == nil {
+			t.Errorf("failed to find the %dth key %x", i, key)
+		}
+		val := valUnconverted.(int)
+		if i != val {
+			t.Errorf("val of key %x incorrect, expected %d, actual %d", key, i, val)
+		}
+	}
+
+	// check search random keys
+	for i := 0; i < n; i++ {
+		var key [64]byte
+		rand.Read(key[:])
+		if trie.Search(key[:]) != nil {
+			t.Errorf("it should be found with key %x", key)
+		}
+	}
+
+	// delete half of the keys
+	for i := 0; i < n; i += 2 {
+		key := keyList[i]
+		trie.Delete(key)
+	}
+
+	// check search keys
+	for i, key := range keyList {
+		valUnconverted := trie.Search(key)
+		if i%2 == 0 { // it should be deleted
+			if valUnconverted != nil {
+				t.Errorf("it should have been deleted i=%d, key=%x", i, key)
+			}
+		} else {
+			if valUnconverted == nil {
+				t.Errorf("failed to find the %dth key %x", i, key)
+			}
+			val := valUnconverted.(int)
+			if i != val {
+				t.Errorf("val of key %x incorrect, expected %d, actual %d", key, i, val)
+			}
+		}
+	}
+}
+
 func BenchmarkVerify(b *testing.B) {
 	pubKey, privKey, _ := ed25519.GenerateKey(nil)
 	msg := make([]byte, 1024)

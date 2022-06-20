@@ -14,9 +14,8 @@ import (
 	"github.com/SharzyL/bbc/bbc/pb"
 )
 
-const rpcTimeout = 1 * time.Second
-
 func main() {
+	const rpcTimeout = 1 * time.Second
 	var opts struct {
 		Miners      []string `short:"m" long:"miner"`
 		NumWorks    int      `short:"n" default:"1000"`
@@ -55,6 +54,8 @@ func main() {
 	wg := sync.WaitGroup{}
 	wg.Add(opts.NumWorks)
 
+	totalDur := time.Duration(0)
+
 	for i := 0; i < opts.NumWorks; i++ {
 		go func(i int) {
 			defer wg.Done()
@@ -73,6 +74,7 @@ func main() {
 				if err != nil {
 					log.Panicf("fail to upload tx to server: %v", err)
 				}
+				totalDur += time.Now().Sub(grStartTime)
 				log.Printf("end %d after %d ms", i, time.Now().Sub(grStartTime).Milliseconds())
 			}
 		}(i)
@@ -80,5 +82,9 @@ func main() {
 	wg.Wait()
 
 	totalTime := time.Now().Sub(startTime)
-	fmt.Printf("%d tasks finished after %d ms\n", opts.NumWorks, totalTime.Milliseconds())
+	fmt.Printf("%d tasks finished after %d ms (%.2f tx/s) (avg latency %.2f ms)\n",
+		opts.NumWorks, totalTime.Milliseconds(),
+		float64(opts.NumWorks)/float64(totalTime.Nanoseconds())*1e9,
+		float64(totalDur.Nanoseconds())/float64(opts.NumWorks)*1e-6,
+	)
 }
