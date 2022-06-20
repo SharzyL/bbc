@@ -25,6 +25,6 @@ jobs:
 
     - name: Build
       run: |
-        CGO_ENABLED=0 GOARCH=amd64 GOOS=linux go build -ldflags="-s -w" -o bbc.linux.x86_64 ./tester/server.go
-        CGO_ENABLED=0 GOARCH=arm64 GOOS=linux go build -ldflags="-s -w" -o bbc.linux.arm64 ./tester/server.go
+        CGO_ENABLED=0 GOARCH=amd64 GOOS=linux go build -ldflags="-s -w" -o server.linux.x86_64 ./server/server.go
+        CGO_ENABLED=0 GOARCH=amd64 GOOS=linux go build -ldflags="-s -w" -o wallet.linux.x86_64 ./wallet/wallet.go
 
