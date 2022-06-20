@@ -13,6 +13,7 @@ type peerInfo struct {
 
 	lastRecvAdvTime   time.Time // zero value means not advertised yet
 	lastRecvAdvHeader *pb.BlockHeader
+	lastRecvAdvHeight int64 // this might be taller than lastRecvAdvHeader
 
 	lastSucAdvTime time.Time // zero value means not sending advertised yet
 
@@ -25,30 +26,35 @@ type peerInfo struct {
 }
 
 type peerMgr struct {
-	logger *zap.SugaredLogger
-	peers  map[string]*peerInfo
-	mtx    *sync.RWMutex
+	Logger *zap.SugaredLogger
+
+	SelfAddr string
+	Peers    map[string]*peerInfo
+	Mtx      *sync.RWMutex
 }
 
-func newPeerMgr(logger *zap.SugaredLogger) *peerMgr {
+func newPeerMgr(logger *zap.SugaredLogger, selfAddr string) *peerMgr {
 	mtx := &sync.RWMutex{}
 	return &peerMgr{
-		logger: logger,
-		peers:  make(map[string]*peerInfo),
-		mtx:    mtx,
+		Logger:   logger,
+		SelfAddr: selfAddr,
+		Peers:    make(map[string]*peerInfo),
+		Mtx:      mtx,
 	}
 }
 
-func (p *peerMgr) addPeer(addr string) {
-	p.peers[addr] = &peerInfo{addr: addr}
-	p.logger.Infow("add new peer", zap.String("addr", addr))
+func (p *peerMgr) addPeer(addr string) *peerInfo {
+	peer := &peerInfo{addr: addr}
+	p.Peers[addr] = peer
+	p.Logger.Infow("add new peer", zap.String("addr", addr))
+	return peer
 }
 
 func (p *peerMgr) getNextToAdvertise(header *pb.BlockHeader) *peerInfo {
 	var minTryAdvTime time.Time
 	var peerToAdvertise *peerInfo
 
-	for _, peer := range p.peers {
+	for _, peer := range p.Peers {
 		// ignore dead node
 		if peer.isDead {
 			continue
@@ -66,7 +72,7 @@ func (p *peerMgr) getNextToAdvertise(header *pb.BlockHeader) *peerInfo {
 		}
 
 		// if peer is not lower, ignore it
-		if !peer.lastRecvAdvTime.IsZero() && peer.lastRecvAdvHeader.Height >= header.Height {
+		if !peer.lastRecvAdvTime.IsZero() && peer.lastRecvAdvHeight >= header.Height {
 			continue
 		}
 
@@ -76,29 +82,38 @@ func (p *peerMgr) getNextToAdvertise(header *pb.BlockHeader) *peerInfo {
 			peerToAdvertise = peer
 		}
 	}
-
-	if peerToAdvertise != nil {
-		return peerToAdvertise
-	} else {
-		return nil
-	}
+	return peerToAdvertise
 }
 
-func (p *peerMgr) onRecvAdvertise(addr string, header *pb.BlockHeader) *peerInfo {
-	peer, found := p.peers[addr]
+func (p *peerMgr) onRecvAdvertise(req *pb.AdvertiseBlockReq) *peerInfo {
+	addr := req.Addr
+	peer, found := p.Peers[addr]
 	if !found {
 		peer = &peerInfo{addr: addr}
-		p.peers[addr] = peer
+		p.Peers[addr] = peer
 	}
 	now := time.Now()
 	peer.lastRecvAdvTime = now
-	peer.lastRecvAdvHeader = header
+	peer.lastRecvAdvHeader = req.Header
+	peer.lastRecvAdvHeight = req.Header.Height
 	peer.isDead = false
+
+	for i, peer := range req.Peers {
+		if peer == p.SelfAddr {
+			continue
+		}
+		info, found := p.Peers[peer]
+		if !found {
+			info = p.addPeer(peer)
+		}
+		// we take max value, since the peer might be inhonest, or not up to date
+		info.lastRecvAdvHeight = maxInt64(info.lastRecvAdvHeight, req.Heights[i])
+	}
 	return peer
 }
 
 func (p *peerMgr) onStartAdvertise(addr string, header *pb.BlockHeader) {
-	peer := p.peers[addr]
+	peer := p.Peers[addr]
 	if peer == nil {
 		panic("nil peer")
 	}
@@ -107,7 +122,7 @@ func (p *peerMgr) onStartAdvertise(addr string, header *pb.BlockHeader) {
 }
 
 func (p *peerMgr) onFailedAdvertise(addr string) {
-	peer := p.peers[addr]
+	peer := p.Peers[addr]
 	if peer == nil {
 		panic("nil peer")
 	}
@@ -118,24 +133,25 @@ func (p *peerMgr) onFailedAdvertise(addr string) {
 	}
 	if now.Sub(peer.firstFailedAdvTime) > peerDeadTimeout && !peer.isDead {
 		peer.isDead = true
-		p.logger.Warnw("peer is dead", zap.String("addr", addr), zap.Time("firstFailed", peer.firstFailedAdvTime))
+		p.Logger.Warnw("peer is dead", zap.String("addr", addr), zap.Time("firstFailed", peer.firstFailedAdvTime))
 	}
 }
 
 func (p *peerMgr) onSucceedAdvertise(addr string, recvHeader *pb.BlockHeader) {
-	peer := p.peers[addr]
+	peer := p.Peers[addr]
 	if peer == nil {
 		panic("nil peer")
 	}
 	now := time.Now()
 	peer.lastSucAdvTime = now
 	peer.lastRecvAdvHeader = recvHeader
+	peer.lastRecvAdvHeight = recvHeader.Height
 	peer.isDead = false
 	peer.firstFailedAdvTime = time.Time{}
 }
 
 func (p *peerMgr) goForEachAlivePeer(f func(addr string)) {
-	for _, peer := range p.peers {
+	for _, peer := range p.Peers {
 		if !peer.isDead {
 			go f(peer.addr)
 		}

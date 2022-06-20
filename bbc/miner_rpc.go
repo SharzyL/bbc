@@ -33,15 +33,15 @@ func (s *minerRpcHandler) GetStatus(context.Context, *pb.GetStatusReq) (*pb.GetS
 	}
 	l.memPoolMtx.RUnlock()
 
-	l.peerMgr.mtx.RLock()
-	_, _ = fmt.Fprintf(sb, "\nConnected to %d peers\n", len(l.peerMgr.peers))
-	for addr, peer := range l.peerMgr.peers {
+	l.peerMgr.Mtx.RLock()
+	_, _ = fmt.Fprintf(sb, "\nConnected to %d peers\n", len(l.peerMgr.Peers))
+	for addr, peer := range l.peerMgr.Peers {
 		_, _ = fmt.Fprintf(sb, " - %s (isDead: %v) (h: %d) (lastAdv: %s (failed: %v))\n",
 			addr, peer.isDead, peer.lastRecvAdvHeader.Height,
 			compactTime(peer.lastTryAdvTime),
 			!peer.firstFailedAdvTime.IsZero())
 	}
-	l.peerMgr.mtx.RUnlock()
+	l.peerMgr.Mtx.RUnlock()
 
 	return &pb.GetStatusAns{Description: sb.String()}, nil
 }
@@ -125,26 +125,19 @@ func (s *minerRpcHandler) AdvertiseBlock(ctx context.Context, req *pb.AdvertiseB
 		zap.Int64("selfH", mainChainHeight),
 		zap.String("hashH", b2str(Hash(header))))
 
-	l.peerMgr.mtx.Lock()
-	l.peerMgr.onRecvAdvertise(req.Addr, header)
-	l.peerMgr.mtx.Unlock()
+	if len(req.Heights) != len(req.Peers) {
+		return nil, fmt.Errorf("inconsistent peers and heights (%d != %d)", len(req.Heights), len(req.Peers))
+	}
+
+	l.peerMgr.Mtx.Lock()
+	l.peerMgr.onRecvAdvertise(req)
+	l.peerMgr.Mtx.Unlock()
 
 	if header.Height > mainChainHeight {
 		go l.syncBlock(req.Addr, header)
 	} else if header.Height < mainChainHeight {
 		go l.sendAdvertisement(topHeader, req.Addr)
 	}
-
-	// update peer list
-	l.peerMgr.mtx.Lock()
-	for _, peer := range req.Peers {
-		_, found := l.peerMgr.peers[peer]
-		if !found && peer != l.SelfAddr {
-			l.peerMgr.addPeer(peer)
-			go l.sendAdvertisement(topHeader, peer)
-		}
-	}
-	l.peerMgr.mtx.Unlock()
 
 	return &pb.AdvertiseBlockAns{Header: topHeader}, nil
 }

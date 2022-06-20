@@ -102,7 +102,7 @@ func NewMiner(opts *MinerOptions) *Miner {
 
 		rpcHandler: minerRpcHandler{}, // init self pointer later
 
-		peerMgr:               newPeerMgr(logger),
+		peerMgr:               newPeerMgr(logger, opts.SelfAddr),
 		storageMgr:            sMgr,
 		hashesUnderSyncing:    list.List{},
 		hashesUnderSyncingMtx: &sync.RWMutex{},
@@ -136,11 +136,11 @@ func (l *Miner) MainLoop() {
 	for {
 		newBlock := l.createBlock()
 		if newBlock != nil {
-			l.peerMgr.mtx.RLock()
+			l.peerMgr.Mtx.RLock()
 			l.peerMgr.goForEachAlivePeer(func(p string) {
 				l.sendAdvertisement(newBlock.Block.Header, p)
 			})
-			l.peerMgr.mtx.RUnlock()
+			l.peerMgr.Mtx.RUnlock()
 		}
 	}
 }
@@ -201,11 +201,11 @@ func (l *Miner) serveLoop() {
 func (l *Miner) advertiseLoop() {
 	// first advertise genesis block, to attract their own advertisement
 	l.chainMtx.RLock()
-	l.peerMgr.mtx.RLock()
+	l.peerMgr.Mtx.RLock()
 	l.peerMgr.goForEachAlivePeer(func(p string) {
 		go l.sendAdvertisement(l.mainChain[0].Block.Header, p)
 	})
-	l.peerMgr.mtx.RUnlock()
+	l.peerMgr.Mtx.RUnlock()
 	l.chainMtx.RUnlock()
 
 	time.Sleep(advertiseInterval)
@@ -214,28 +214,28 @@ func (l *Miner) advertiseLoop() {
 		headerToAdvertise := l.mainChain[len(l.mainChain)-1].Block.Header
 		l.chainMtx.RUnlock()
 
-		l.peerMgr.mtx.RLock()
+		l.peerMgr.Mtx.RLock()
 		peerAddr := l.peerMgr.getNextToAdvertise(headerToAdvertise)
-		l.peerMgr.mtx.RUnlock()
+		l.peerMgr.Mtx.RUnlock()
 
 		// advertise new block to peers
 		if peerAddr != nil {
 			// here we call onStartAdvertise to force update lastTryAdvTime and lastTryAdvHeader
-			l.peerMgr.mtx.Lock()
+			l.peerMgr.Mtx.Lock()
 			l.peerMgr.onStartAdvertise(peerAddr.addr, headerToAdvertise)
-			l.peerMgr.mtx.Unlock()
+			l.peerMgr.Mtx.Unlock()
 
 			go l.sendAdvertisement(headerToAdvertise, peerAddr.addr)
 		} else {
-			time.Sleep(advertiseInterval)
+			time.Sleep(1 * time.Second)
 		}
 	}
 }
 
 func (l *Miner) sendAdvertisement(header *pb.BlockHeader, addr string) {
-	l.peerMgr.mtx.Lock()
+	l.peerMgr.Mtx.Lock()
 	l.peerMgr.onStartAdvertise(addr, header)
-	l.peerMgr.mtx.Unlock()
+	l.peerMgr.Mtx.Unlock()
 
 	// connect to peer
 	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
@@ -243,9 +243,9 @@ func (l *Miner) sendAdvertisement(header *pb.BlockHeader, addr string) {
 	cancel()
 	if err != nil {
 		l.logger.Warnw("failed to dial peer", zap.String("peerAddr", addr), zap.Error(err))
-		l.peerMgr.mtx.Lock()
+		l.peerMgr.Mtx.Lock()
 		l.peerMgr.onFailedAdvertise(addr)
-		l.peerMgr.mtx.Unlock()
+		l.peerMgr.Mtx.Unlock()
 		return
 	}
 	defer conn.Close()
@@ -254,13 +254,15 @@ func (l *Miner) sendAdvertisement(header *pb.BlockHeader, addr string) {
 
 	// prepare peers
 	var peers []string
-	l.peerMgr.mtx.RLock()
-	for addr, peer := range l.peerMgr.peers {
+	var heights []int64
+	l.peerMgr.Mtx.RLock()
+	for addr, peer := range l.peerMgr.Peers {
 		if !peer.isDead {
 			peers = append(peers, addr)
+			heights = append(heights, peer.lastRecvAdvHeight)
 		}
 	}
-	l.peerMgr.mtx.RUnlock()
+	l.peerMgr.Mtx.RUnlock()
 
 	// send advertisement
 	l.logger.Debugw("advertise block to peer",
@@ -269,16 +271,17 @@ func (l *Miner) sendAdvertisement(header *pb.BlockHeader, addr string) {
 		zap.String("peer", addr))
 	ctx, cancel = context.WithTimeout(context.Background(), rpcTimeout)
 	ans, err := client.AdvertiseBlock(ctx, &pb.AdvertiseBlockReq{
-		Header: header,
-		Addr:   l.SelfAddr,
-		Peers:  peers,
+		Header:  header,
+		Addr:    l.SelfAddr,
+		Peers:   peers,
+		Heights: heights,
 	})
 	cancel()
 	if err != nil {
 		l.logger.Errorw("fail to advertise block to peer", zap.Error(err), zap.String("peerAddr", addr))
-		l.peerMgr.mtx.Lock()
+		l.peerMgr.Mtx.Lock()
 		l.peerMgr.onFailedAdvertise(addr)
-		l.peerMgr.mtx.Unlock()
+		l.peerMgr.Mtx.Unlock()
 		return
 	} else {
 		l.logger.Debugw("advertise block to peer successful",
@@ -288,9 +291,9 @@ func (l *Miner) sendAdvertisement(header *pb.BlockHeader, addr string) {
 		if ans.Header.Height > header.Height {
 			go l.syncBlock(addr, ans.Header)
 		}
-		l.peerMgr.mtx.Lock()
+		l.peerMgr.Mtx.Lock()
 		l.peerMgr.onSucceedAdvertise(addr, header)
-		l.peerMgr.mtx.Unlock()
+		l.peerMgr.Mtx.Unlock()
 	}
 }
 
@@ -368,7 +371,7 @@ func (l *Miner) syncBlock(addr string, topHeader *pb.BlockHeader) {
 	l.chainMtx.RUnlock()
 
 	// in case that another sync thread has already completed the syncing
-	if topHeader.Height < int64(len(originalChain)-1) || bytes.Equal(originalChain[len(originalChain)-1].Hash, Hash(topHeader)) {
+	if topHeader.Height <= int64(len(originalChain)-1) || bytes.Equal(originalChain[len(originalChain)-1].Hash, Hash(topHeader)) {
 		l.logger.Infow("found no need to sync actually before peeking", zap.Int("mainChainHeight", len(originalChain)-1))
 		return
 	}

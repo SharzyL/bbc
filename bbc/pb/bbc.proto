@@ -106,6 +106,7 @@ message AdvertiseBlockReq {
   BlockHeader header = 1;
   string addr = 2;
   repeated string peers = 3;
+  repeated int64 heights = 4;
 }
 
 message AdvertiseBlockAns {
