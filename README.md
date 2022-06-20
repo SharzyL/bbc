@@ -10,16 +10,16 @@ It looks usable.
 
 ### Setup Miners
 
-Prepare storage folder and configuration file
+Prepare storage folder and keypair
 ```shell
 mkdir .bbc_storage  # the folder to store blockchain data
-mkdir conf          # the folder to store configurations
+mkdir conf # the folder to store configurations
 go run wallet/wallet.go genkey > conf/miner1.json # generate a key pair for the node
 ```
 
 Set up a server listening on 30001 port, it broadcast its own address as `miner1.example.com:30001`, and connect to peers at `miner2.example.com:30001` and `miner3.example3.com:30001`. The miner will store the mining reward in the address corresponding to the keypair in `conf/miner1.json`.
 ```shell
-go run tester/server.go -s conf/miner1.json \
+go run tester/server.go --key conf/miner1.json \
   -l 0.0.0.0:30001 \
   -a miner1.example.com:30001 \
   -p miner2.example.com:30001 \
@@ -57,4 +57,4 @@ go run wallet/wallet.go balance -a miner1
 go run wallet/wallet.go transfer -to miner2 400 --fee 5
 ```
 
-Run `go run wallet/wallet.go -h` for more available operations.
+Run `go run wallet/wallet.go -h` for more available actions.
