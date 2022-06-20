@@ -19,7 +19,7 @@ go run wallet/wallet.go genkey > conf/miner1.json # generate a key pair for the 
 
 Set up a server listening on 30001 port, it broadcast its own address as `miner1.example.com:30001`, and connect to peers at `miner2.example.com:30001` and `miner3.example3.com:30001`. The miner will store the mining reward in the address corresponding to the keypair in `conf/miner1.json`.
 ```shell
-go run tester/server.go --key conf/miner1.json \
+go run server/server.go --key conf/miner1.json \
   -l 0.0.0.0:30001 \
   -a miner1.example.com:30001 \
   -p miner2.example.com:30001 \
